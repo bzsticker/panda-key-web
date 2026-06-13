@@ -1,0 +1,22 @@
+# worker-consumer/wrangler.toml
+name = "pandakey-queue-consumer"
+main = "index.ts"
+compatibility_date = "2024-05-02"
+
+[[queues.consumers]]
+queue = "pandakey-queue"
+max_batch_size = 10
+max_batch_timeout = 5
+
+[vars]
+PYTHON_WORKER_URL = "http://127.0.0.1:8000/analyze"
+
+[env.production]
+vars = { PYTHON_WORKER_URL = "https://bzsticker-pandakey-audio-worker.hf.space/analyze" }
+
+[[env.production.queues.consumers]]
+queue = "pandakey-queue"
+max_batch_size = 10
+max_batch_timeout = 5
+
+

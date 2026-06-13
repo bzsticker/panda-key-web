@@ -1,0 +1,21 @@
+# wrangler.toml
+name = "panda-key"
+compatibility_date = "2026-06-12"
+compatibility_flags = [ "nodejs_compat" ]
+
+[vars]
+PYTHON_WORKER_URL = "https://bzsticker-pandakey-audio-worker.hf.space/analyze"
+API_SECRET = "pandakey_super_secret_token_123!"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "pandakey-db"
+database_id = "8c6f1d26-5875-408f-a24d-a6fb9a9e50e0"
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "pandakey-r2"
+
+[[queues.producers]]
+queue = "pandakey-queue"
+binding = "QUEUE"

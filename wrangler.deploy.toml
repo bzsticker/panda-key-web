@@ -1,0 +1,43 @@
+# wrangler.deploy.toml
+name = "panda-key"
+pages_build_output_dir = ".vercel/output/static"
+compatibility_date = "2026-06-12"
+compatibility_flags = [ "nodejs_compat" ]
+
+[vars]
+PYTHON_WORKER_URL = "https://bzsticker-pandakey-audio-worker.hf.space/analyze"
+API_SECRET = "pandakey_super_secret_token_123!"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "pandakey-db"
+database_id = "8c6f1d26-5875-408f-a24d-a6fb9a9e50e0"
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "pandakey-r2"
+
+[[queues.producers]]
+queue = "pandakey-queue"
+binding = "QUEUE"
+
+[env.production]
+compatibility_date = "2026-06-12"
+compatibility_flags = [ "nodejs_compat" ]
+
+[env.production.vars]
+PYTHON_WORKER_URL = "https://bzsticker-pandakey-audio-worker.hf.space/analyze"
+API_SECRET = "pandakey_super_secret_token_123!"
+
+[[env.production.d1_databases]]
+database_id = "8c6f1d26-5875-408f-a24d-a6fb9a9e50e0"
+binding = "DB"
+database_name = "DB"
+
+[[env.production.r2_buckets]]
+bucket_name = "pandakey-r2"
+binding = "BUCKET"
+
+[[env.production.queues.producers]]
+binding = "QUEUE"
+queue = "pandakey-queue"
