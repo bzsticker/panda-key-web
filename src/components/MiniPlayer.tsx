@@ -124,6 +124,7 @@ export default function MiniPlayer() {
         cursorWidth: 2,
         height: 90,
         media: audioEl,
+        url: `/api/tracks/${currentTrack.id}/audio`,
         minPxPerSec: zoom,
         fillParent: zoom === 0,
         interact: true

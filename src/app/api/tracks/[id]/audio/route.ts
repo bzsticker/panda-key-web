@@ -116,6 +116,7 @@ export async function GET(
     const headers = new Headers();
     headers.set('Content-Type', track.file_type || 'audio/mpeg');
     headers.set('Accept-Ranges', 'bytes');
+    headers.set('Cache-Control', 'public, max-age=31536000, immutable');
     
     if (isPartial) {
       headers.set('Content-Range', `bytes ${start}-${end}/${fileSize}`);
