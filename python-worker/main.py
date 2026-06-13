@@ -158,21 +158,28 @@ def extract_cover_art(file_path):
     return None
 
 
-def estimate_precise_bpm(y, sr, hop_length=256):
+def estimate_precise_bpm(y, sr):
+    # Downsample to 22050 Hz to speed up beat/tempo analysis by 2x and reduce memory usage
+    target_sr = 22050
+    y_down = librosa.resample(y, orig_sr=sr, target_sr=target_sr)
+    
+    # hop_length=128 at 22050 Hz has the exact same temporal resolution as hop_length=256 at 44100 Hz
+    hop_length = 128
+    
     # 1. Get rough tempo using librosa's robust estimator
-    rough_tempos = librosa.feature.tempo(y=y, sr=sr, hop_length=hop_length, start_bpm=120)
+    rough_tempos = librosa.feature.tempo(y=y_down, sr=target_sr, hop_length=hop_length, start_bpm=120)
     rough_tempo = float(rough_tempos[0] if isinstance(rough_tempos, (np.ndarray, list)) else rough_tempos)
     
     # 2. Compute onset envelope of percussive component to focus on beat transients
-    y_percussive = librosa.effects.percussive(y)
-    onset_env = librosa.onset.onset_strength(y=y_percussive, sr=sr, hop_length=hop_length)
+    y_percussive = librosa.effects.percussive(y_down)
+    onset_env = librosa.onset.onset_strength(y=y_percussive, sr=target_sr, hop_length=hop_length)
     
     # 3. Compute autocorrelation
-    max_lag = int(np.ceil(60.0 * sr / (hop_length * 40.0)))
+    max_lag = int(np.ceil(60.0 * target_sr / (hop_length * 40.0)))
     ac = librosa.autocorrelate(onset_env, max_size=max_lag)
     
     # 4. Find the lag corresponding to the rough tempo
-    rough_lag = 60.0 * sr / (hop_length * rough_tempo)
+    rough_lag = 60.0 * target_sr / (hop_length * rough_tempo)
     
     # 5. Search for the local peak in the autocorrelation around rough_lag (+/- 4 lags)
     rough_lag_idx = int(round(rough_lag))
@@ -203,7 +210,7 @@ def estimate_precise_bpm(y, sr, hop_length=256):
         interpolated_lag = peak_idx
         
     # 7. Compute precise BPM from the interpolated fractional lag
-    precise_bpm = 60.0 * sr / (hop_length * interpolated_lag)
+    precise_bpm = 60.0 * target_sr / (hop_length * interpolated_lag)
     
     # Sanity check: if the precise BPM is way off from rough_tempo, fallback to rough_tempo
     if abs(precise_bpm - rough_tempo) > 10.0:
@@ -213,11 +220,15 @@ def estimate_precise_bpm(y, sr, hop_length=256):
 
 
 def estimate_key(y, sr):
+    # Downsample to 11025 Hz for extremely fast and low-memory key analysis (Nyquist 5512.5 Hz is perfect for musical keys)
+    target_sr = 11025
+    y_down = librosa.resample(y, orig_sr=sr, target_sr=target_sr)
+    
     # Separate harmonic component to remove percussion noise for more accurate key detection
-    y_harmonic = librosa.effects.harmonic(y)
+    y_harmonic = librosa.effects.harmonic(y_down)
     
     # Chroma energy computation on harmonic component
-    chroma = librosa.feature.chroma_cqt(y=y_harmonic, sr=sr)
+    chroma = librosa.feature.chroma_cqt(y=y_harmonic, sr=target_sr)
     chroma_mean = np.mean(chroma, axis=1)
     
     best_corr = -1
