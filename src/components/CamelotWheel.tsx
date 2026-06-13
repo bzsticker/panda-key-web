@@ -58,6 +58,7 @@ export default function CamelotWheel() {
     setFilterKeyGroup,
     setSearchQuery,
     settings,
+    currentTrack
   } = useApp();
 
   const getDisplayKey = (key: string) => {
@@ -83,8 +84,11 @@ export default function CamelotWheel() {
     setFilterKey('');
   };
 
-  // Compatibility array if a filter key is selected
-  const compatibleKeys = filterKey ? getCompatibleCamelotKeys(filterKey) : [];
+  const referenceKey = filterKey || (currentTrack && currentTrack.analysis_status === 'completed' ? currentTrack.camelot_key : '');
+  const isFromPlaying = !filterKey && !!referenceKey;
+
+  // Compatibility array if a filter key or playing key is selected
+  const compatibleKeys = referenceKey ? getCompatibleCamelotKeys(referenceKey) : [];
 
   const renderSectors = (keys: string[], isOuter: boolean) => {
     const rIn = isOuter ? 64 : 34;
@@ -106,25 +110,28 @@ export default function CamelotWheel() {
       const tx = 100 + textRadius * Math.cos(thetaRad);
       const ty = 100 + textRadius * Math.sin(thetaRad);
 
-      const isActive = filterKey === k;
+      const isActive = referenceKey === k;
       const isCompatible = compatibleKeys.includes(k);
-      const hasFilter = !!filterKey;
+      const hasFilter = !!referenceKey;
 
       // Determine colors
       let fill = 'rgba(255, 255, 255, 0.02)';
       let stroke = 'rgba(255, 255, 255, 0.05)';
       let textColor = 'rgba(255, 255, 255, 0.35)';
       let opacity = 1;
+      let strokeWidth = "0.75";
 
       if (hasFilter) {
         if (isActive) {
           fill = keyColors[k];
-          stroke = '#ffffff';
+          stroke = isFromPlaying ? 'var(--accent-cyan)' : '#ffffff';
           textColor = '#ffffff';
+          strokeWidth = isFromPlaying ? "1.5" : "1.25";
         } else if (isCompatible) {
           fill = getRgbaColor(keyColors[k], 0.85); // High opacity for compatible keys
-          stroke = 'rgba(255, 255, 255, 0.5)';
+          stroke = isFromPlaying ? 'var(--accent-green)' : 'rgba(255, 255, 255, 0.5)';
           textColor = '#ffffff';
+          strokeWidth = "1.0";
         } else {
           fill = 'rgba(255, 255, 255, 0.02)';
           stroke = 'rgba(255, 255, 255, 0.04)';
@@ -148,7 +155,7 @@ export default function CamelotWheel() {
             d={getSectorPath(100, 100, rIn, rOut, startAngle, endAngle)}
             fill={fill}
             stroke={stroke}
-            strokeWidth="0.75"
+            strokeWidth={strokeWidth}
             style={{ transition: 'fill 0.2s ease, stroke 0.2s ease' }}
             className="wheel-sector"
           />
@@ -201,8 +208,8 @@ export default function CamelotWheel() {
             cy="100" 
             r="34" 
             fill="var(--panel-bg-solid)" 
-            stroke={filterKey ? centerColor : 'rgba(255, 255, 255, 0.1)'} 
-            strokeWidth={filterKey ? '1.5' : '1'} 
+            stroke={referenceKey ? centerColor : 'rgba(255, 255, 255, 0.1)'} 
+            strokeWidth={referenceKey ? '1.5' : '1'} 
             style={{ transition: 'stroke 0.2s ease' }}
           />
 
@@ -221,25 +228,25 @@ export default function CamelotWheel() {
               textShadow: '0px 1px 2px rgba(0, 0, 0, 0.8)'
             }}
           >
-            ACTIVE KEY
+            {filterKey ? 'FILTER KEY' : (isFromPlaying ? 'PLAYING KEY' : 'ACTIVE KEY')}
           </text>
           <text
             x="100"
             y="112"
             textAnchor="middle"
-            fill={filterKey ? centerColor : 'var(--text-main)'}
+            fill={referenceKey ? centerColor : 'var(--text-main)'}
             style={{ 
               fontSize: '20px', 
               fontWeight: '900', 
               userSelect: 'none', 
               pointerEvents: 'none',
-              textShadow: filterKey 
+              textShadow: referenceKey 
                 ? `0px 1px 3px rgba(0, 0, 0, 0.9), 0 0 10px ${getRgbaColor(centerColor, 0.75)}` 
                 : '0px 1px 3px rgba(0, 0, 0, 0.9)',
               transition: 'fill 0.2s ease'
             }}
           >
-            {filterKey ? getDisplayKey(filterKey) : '--'}
+            {referenceKey ? getDisplayKey(referenceKey) : '--'}
           </text>
         </svg>
       </div>

@@ -82,7 +82,7 @@ export async function PATCH(
     const allowedFields = [
       'title', 'artist', 'album', 'genre', 'year', 'comments', 
       'musical_key', 'camelot_key', 'bpm', 'energy', 'duration', 
-      'analysis_status', 'r2_key'
+      'analysis_status', 'r2_key', 'file_name'
     ];
 
     const sets = [];

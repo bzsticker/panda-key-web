@@ -5,6 +5,7 @@ import React from 'react';
 import { useApp } from '@/context/AppContext';
 import CamelotWheel from './CamelotWheel';
 import { getTranslation } from '@/lib/translations';
+import { getCompatibleCamelotKeys } from '@/lib/keys';
 
 export default function Sidebar() {
   const {
@@ -23,13 +24,40 @@ export default function Sidebar() {
     deletePlaylist,
     createCollection,
     deleteCollection,
-    settings
+    settings,
+    currentTrack,
+    playTrack
   } = useApp();
 
   const t = getTranslation(settings.language);
 
   // Calculate quick stats
   const allTracksCount = tracks.length;
+
+  // Get compatible tracks for the currently playing track
+  const suggestions = React.useMemo(() => {
+    if (!currentTrack || currentTrack.analysis_status !== 'completed' || !currentTrack.camelot_key) {
+      return [];
+    }
+    const compatibleKeys = getCompatibleCamelotKeys(currentTrack.camelot_key);
+    
+    return tracks
+      .filter(t => 
+        t.id !== currentTrack.id && 
+        t.analysis_status === 'completed' && 
+        t.camelot_key && 
+        compatibleKeys.includes(t.camelot_key)
+      )
+      .map(t => {
+        const bpmDiff = t.bpm - currentTrack.bpm;
+        const bpmPercent = (Math.abs(bpmDiff) / currentTrack.bpm) * 100;
+        return { track: t, bpmDiff, bpmPercent };
+      })
+      // Filter out tracks that have > 15% BPM difference as they are harder to beatmatch
+      .filter(item => item.bpmPercent <= 15)
+      .sort((a, b) => a.bpmPercent - b.bpmPercent)
+      .slice(0, 4);
+  }, [tracks, currentTrack]);
 
   return (
     <aside className="sidebar">
@@ -48,6 +76,55 @@ export default function Sidebar() {
 
       {/* Camelot Key Wheel */}
       <CamelotWheel />
+
+      {/* Harmonic Transition Suggestions */}
+      {currentTrack && suggestions.length > 0 && (
+        <div className="suggestions-box" style={{ marginTop: '20px', marginBottom: '10px' }}>
+          <div className="section-title" style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1px', color: 'var(--text-muted)', marginBottom: '8px', fontWeight: 'bold' }}>
+            {settings.language === 'th' ? 'แนะนำเพลงถัดไป' : 'Next Track Matches'}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {suggestions.map(({ track, bpmDiff }) => {
+              const bpmDiffText = bpmDiff === 0 ? '±0' : (bpmDiff > 0 ? `+${bpmDiff.toFixed(1)}` : bpmDiff.toFixed(1));
+              const bpmDiffColor = Math.abs(bpmDiff) <= 3 ? 'var(--accent-green)' : (Math.abs(bpmDiff) <= 8 ? 'var(--accent-yellow)' : 'var(--accent-red)');
+              
+              return (
+                <div 
+                  key={track.id} 
+                  className="suggestion-item" 
+                  onDoubleClick={() => playTrack(track)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    padding: '8px 10px',
+                    borderRadius: 'var(--border-radius-md)',
+                    background: 'rgba(255, 255, 255, 0.03)',
+                    border: '1px solid var(--panel-border)',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s ease'
+                  }}
+                  title={settings.language === 'th' ? 'ดับเบิ้ลคลิกเพื่อเล่นเพลง' : 'Double click to play'}
+                >
+                  <img 
+                    src={`/api/tracks/${track.id}/cover`} 
+                    alt="cover" 
+                    style={{ width: '28px', height: '28px', borderRadius: '4px', objectFit: 'cover' }} 
+                  />
+                  <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+                    <b style={{ fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>{track.title}</b>
+                    <span style={{ fontSize: '10px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>{track.artist}</span>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '2px', flexShrink: 0 }}>
+                    <span style={{ fontSize: '10.5px', fontWeight: 'bold', color: 'var(--text-main)' }}>{track.camelot_key}</span>
+                    <span style={{ fontSize: '9px', color: bpmDiffColor, fontWeight: '600' }}>{bpmDiffText} BPM</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
 
 

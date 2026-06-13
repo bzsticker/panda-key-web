@@ -49,7 +49,8 @@ export default function CollectionPage() {
     selectedCollectionId,
     setSelectedCollectionId,
     updatePlaylistTracks,
-    updateCollectionTracks
+    updateCollectionTracks,
+    currentTrack
   } = useApp();
 
   const t = getTranslation(settings.language);
@@ -69,6 +70,8 @@ export default function CollectionPage() {
   const [isDjExportOpen, setIsDjExportOpen] = useState(false);
   const [djExportFormat, setDjExportFormat] = useState<'rekordbox' | 'traktor'>('rekordbox');
   const [localPathPrefix, setLocalPathPrefix] = useState('C:\\Users\\PXNDA\\Music\\PandaKey\\');
+  const [autoRenameEnabled, setAutoRenameEnabled] = useState(false);
+  const [renamePattern, setRenamePattern] = useState('[BPM] - [Key] - Artist - Title');
 
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
     const id = Math.random().toString();
@@ -332,6 +335,27 @@ export default function CollectionPage() {
         if (selectedTrackIds.length === 1) {
           if (editData.title !== undefined) payload.title = editData.title;
           if (editData.file_name !== undefined) payload.file_name = editData.file_name;
+        }
+
+        // Auto Rename file based on pattern if checked
+        if (autoRenameEnabled) {
+          const existingTrack = tracks.find(t => t.id === id);
+          const finalArtist = editData.artist !== undefined ? editData.artist : (existingTrack?.artist || 'Unknown Artist');
+          const finalTitle = editData.title !== undefined ? editData.title : (existingTrack?.title || 'Unknown Title');
+          const finalBpm = editData.bpm !== undefined ? editData.bpm : (existingTrack?.bpm || 120);
+          const finalKey = editData.camelot_key !== undefined ? editData.camelot_key : (existingTrack?.camelot_key || '');
+          const existingFileName = existingTrack?.file_name || 'track.mp3';
+          
+          const ext = existingFileName.split('.').pop() || 'mp3';
+          const cleanBpm = Math.round(Number(finalBpm) || 120);
+          
+          let base = renamePattern
+            .replace('[BPM]', String(cleanBpm))
+            .replace('[Key]', finalKey)
+            .replace('Artist', finalArtist)
+            .replace('Title', finalTitle);
+            
+          payload.file_name = `${base}.${ext}`;
         }
         
         const res = await fetch(`/api/tracks/${id}`, {
@@ -1355,10 +1379,23 @@ export default function CollectionPage() {
 
                   const height = rowHeights[track.id] || 48;
 
+                  const isCurrentPlaying = currentTrack?.id === track.id;
+                  const isHarmonicCompatible = currentTrack && 
+                    currentTrack.analysis_status === 'completed' && 
+                    track.analysis_status === 'completed' && 
+                    !isCurrentPlaying &&
+                    getCompatibleCamelotKeys(currentTrack.camelot_key).includes(track.camelot_key);
+
+                  const rowClassNames = [
+                    isSelected ? 'selected' : '',
+                    isCurrentPlaying ? 'current-playing' : '',
+                    isHarmonicCompatible ? 'harmonic-compatible' : ''
+                  ].filter(Boolean).join(' ');
+
                   return (
                     <tr 
                       key={track.id}
-                      className={isSelected ? 'selected' : ''}
+                      className={rowClassNames}
                       onClick={(e) => handleRowClick(e, track, index)}
                       onDoubleClick={() => playTrack(track)}
                       onContextMenu={(e) => handleRowContextMenu(e, track, index)}
@@ -1544,10 +1581,25 @@ export default function CollectionPage() {
               const keyColor = keyColors[track.camelot_key] || '#fff';
               const coverUrl = `/api/tracks/${track.id}/cover`;
 
+              const isCurrentPlaying = currentTrack?.id === track.id;
+              const isHarmonicCompatible = currentTrack && 
+                currentTrack.analysis_status === 'completed' && 
+                track.analysis_status === 'completed' && 
+                !isCurrentPlaying &&
+                getCompatibleCamelotKeys(currentTrack.camelot_key).includes(track.camelot_key);
+
+              const cardClassNames = [
+                'panel',
+                'grid-track-card',
+                isSelected ? 'selected' : '',
+                isCurrentPlaying ? 'current-playing' : '',
+                isHarmonicCompatible ? 'harmonic-compatible' : ''
+              ].filter(Boolean).join(' ');
+
               return (
                 <div 
                   key={track.id}
-                  className={`panel grid-track-card ${isSelected ? 'selected' : ''}`}
+                  className={cardClassNames}
                   onClick={(e) => handleRowClick(e, track, index)}
                   onDoubleClick={() => playTrack(track)}
                   onContextMenu={(e) => handleRowContextMenu(e, track, index)}
@@ -1947,6 +1999,43 @@ export default function CollectionPage() {
                   </select>
                 </div>
               </div>
+
+              <div className="form-row">
+                <div className="form-group" style={{ gridColumn: 'span 2' }}>
+                  <label className="flex items-center gap-2 cursor-pointer" style={{ flexDirection: 'row', gap: '8px', marginTop: '10px' }}>
+                    <input 
+                      type="checkbox" 
+                      checked={autoRenameEnabled} 
+                      onChange={(e) => setAutoRenameEnabled(e.target.checked)} 
+                      style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                    />
+                    <span>{settings.language === 'th' ? 'เปลี่ยนชื่อไฟล์ตามรูปแบบโดยอัตโนมัติ (Auto Rename Files)' : 'Auto Rename Files by Pattern'}</span>
+                  </label>
+                </div>
+              </div>
+
+              {autoRenameEnabled && (
+                <div className="form-row">
+                  <div className="form-group" style={{ gridColumn: 'span 2' }}>
+                    <label>{settings.language === 'th' ? 'รูปแบบชื่อไฟล์' : 'Filename Pattern'}</label>
+                    <select 
+                      value={renamePattern} 
+                      onChange={(e) => setRenamePattern(e.target.value)}
+                      style={{ background: 'var(--bg-primary)', color: 'var(--text-main)' }}
+                    >
+                      <option value="[BPM] - [Key] - Artist - Title">[BPM] - [Key] - Artist - Title</option>
+                      <option value="[Key] - [BPM] - Artist - Title">[Key] - [BPM] - Artist - Title</option>
+                      <option value="Artist - Title ([Key])">Artist - Title ([Key])</option>
+                      <option value="Artist - Title ([BPM] - [Key])">Artist - Title ([BPM] - [Key])</option>
+                    </select>
+                    <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                      {settings.language === 'th' 
+                        ? 'ตัวอย่าง: [124] - [8A] - Artist - Title.mp3 (จะอิงตามข้อมูลที่บันทึกใหม่)' 
+                        : 'Example: [124] - [8A] - Artist - Title.mp3 (based on new updates)'}
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
             <div className="modal-footer">
               <button 

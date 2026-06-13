@@ -63,7 +63,8 @@ export default function MiniPlayer() {
     volume,
     setVolume,
     audioRef,
-    settings
+    settings,
+    fetchLibrary
   } = useApp();
 
   const t = getTranslation(settings.language);
@@ -204,7 +205,17 @@ export default function MiniPlayer() {
           const beatDuration = 60 / bpm;
           const barDuration = beatDuration * 4;
 
-          const totalBeats = Math.round((secs / beatDuration) * 100) / 100;
+          // Parse grid offset from comments
+          let gridOffset = 0;
+          if (currentTrack?.comments) {
+            const match = currentTrack.comments.match(/\[grid_offset=(-?\d+(?:\.\d+)?)\]/);
+            if (match) {
+              gridOffset = parseFloat(match[1]);
+            }
+          }
+
+          const adjustedSecs = Math.max(0, secs - gridOffset);
+          const totalBeats = Math.round((adjustedSecs / beatDuration) * 100) / 100;
           const bar = Math.floor(totalBeats / 4) + 1;
           const beat = Math.round(totalBeats % 4) + 1;
 
@@ -255,7 +266,7 @@ export default function MiniPlayer() {
         }
       }
     };
-  }, [wavesurfer, zoom, currentTrack?.id, currentTrack?.bpm]);
+  }, [wavesurfer, zoom, currentTrack?.id, currentTrack?.bpm, currentTrack?.comments]);
 
   // Helper to create flag DOM element for a region
   const createRegionContent = (cue: typeof cues[0]) => {
@@ -531,6 +542,58 @@ export default function MiniPlayer() {
     }
   };
 
+  const handleShiftGrid = async (amount: number) => {
+    if (!currentTrack) return;
+    
+    // Parse existing offset
+    let gridOffset = 0;
+    let baseComments = currentTrack.comments || '';
+    const match = baseComments.match(/\[grid_offset=(-?\d+(?:\.\d+)?)\]/);
+    if (match) {
+      gridOffset = parseFloat(match[1]);
+      baseComments = baseComments.replace(/\[grid_offset=(-?\d+(?:\.\d+)?)\]/, '').trim();
+    }
+    
+    const newOffset = Math.max(-10, Math.min(10, gridOffset + amount));
+    const newComments = `${baseComments} [grid_offset=${newOffset.toFixed(3)}]`.trim();
+    
+    try {
+      const res = await fetch(`/api/tracks/${currentTrack.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ comments: newComments })
+      });
+      if (res.ok) {
+        fetchLibrary();
+      }
+    } catch (err) {
+      console.error('Failed to shift beat grid:', err);
+    }
+  };
+
+  const handleSetFirstBeat = async () => {
+    if (!currentTrack) return;
+    
+    let baseComments = currentTrack.comments || '';
+    baseComments = baseComments.replace(/\[grid_offset=(-?\d+(?:\.\d+)?)\]/, '').trim();
+    
+    const newOffset = currentTime;
+    const newComments = `${baseComments} [grid_offset=${newOffset.toFixed(3)}]`.trim();
+    
+    try {
+      const res = await fetch(`/api/tracks/${currentTrack.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ comments: newComments })
+      });
+      if (res.ok) {
+        fetchLibrary();
+      }
+    } catch (err) {
+      console.error('Failed to set first beat downbeat:', err);
+    }
+  };
+
   // Render when no track is loaded
   if (!currentTrack) {
     return (
@@ -648,7 +711,34 @@ export default function MiniPlayer() {
             <ZoomIn size={16} />
           </button>
 
-
+          {/* Beat Grid Editor */}
+          <div className="grid-editor-group" style={{ display: 'flex', alignItems: 'center', gap: '3px', border: '1px solid var(--panel-border)', borderRadius: 'var(--border-radius-md)', padding: '2px 4px', background: 'rgba(255, 255, 255, 0.02)' }}>
+            <span style={{ fontSize: '9.5px', color: 'var(--text-muted)', fontWeight: 'bold', padding: '0 4px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Grid</span>
+            <button 
+              className="btn-control"
+              onClick={() => handleShiftGrid(-0.01)}
+              title="Shift Grid Left (-10ms)"
+              style={{ padding: '2px 5px', fontSize: '10px', height: '22px' }}
+            >
+              ◀
+            </button>
+            <button 
+              className="btn-control"
+              onClick={handleSetFirstBeat}
+              title="Set Current Position as First Beat (Downbeat)"
+              style={{ padding: '2px 6px', fontSize: '10px', height: '22px', fontWeight: 'bold' }}
+            >
+              Set 1st
+            </button>
+            <button 
+              className="btn-control"
+              onClick={() => handleShiftGrid(0.01)}
+              title="Shift Grid Right (+10ms)"
+              style={{ padding: '2px 5px', fontSize: '10px', height: '22px' }}
+            >
+              ▶
+            </button>
+          </div>
 
           {/* Add Cue Button */}
           <button 
