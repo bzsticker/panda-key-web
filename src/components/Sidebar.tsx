@@ -24,12 +24,18 @@ export default function Sidebar() {
     deletePlaylist,
     createCollection,
     deleteCollection,
+    updatePlaylistTracks,
+    updateCollectionTracks,
     settings,
     currentTrack,
     playTrack
   } = useApp();
 
   const t = getTranslation(settings.language);
+
+  // Drag over states for drag and drop
+  const [dragOverCollectionId, setDragOverCollectionId] = React.useState<string | null>(null);
+  const [dragOverPlaylistId, setDragOverPlaylistId] = React.useState<string | null>(null);
 
   // Calculate quick stats
   const allTracksCount = tracks.length;
@@ -168,6 +174,7 @@ export default function Sidebar() {
         <div id="sidebarCollectionsContainer" className="flex flex-col gap-1 mb-3">
           {(collections || []).map(c => {
             const isActive = activePage === 'collection' && selectedCollectionId === c.id;
+            const isDragOver = dragOverCollectionId === c.id;
             return (
               <div
                 key={c.id}
@@ -177,12 +184,44 @@ export default function Sidebar() {
                   setActiveFilter('');
                   setSelectedCollectionId(c.id);
                 }}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  if (dragOverCollectionId !== c.id) {
+                    setDragOverCollectionId(c.id);
+                  }
+                }}
+                onDragLeave={() => {
+                  setDragOverCollectionId(null);
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragOverCollectionId(null);
+                  try {
+                    const rawData = e.dataTransfer.getData('application/pandakey-tracks');
+                    if (rawData) {
+                      const data = JSON.parse(rawData);
+                      if (data.type === 'pandakey-tracks' && Array.isArray(data.ids)) {
+                        const newTrackIds = Array.from(new Set([...(c.trackIds || []), ...data.ids]));
+                        updateCollectionTracks(c.id, newTrackIds);
+                        const msg = settings.language === 'th'
+                          ? `เพิ่มเพลง ${data.ids.length} เพลงลง Collection "${c.name}" สำเร็จ`
+                          : `Successfully added ${data.ids.length} track(s) to Collection "${c.name}"`;
+                        window.dispatchEvent(new CustomEvent('pandakey:toast', { detail: { message: msg, type: 'success' } }));
+                      }
+                    }
+                  } catch (err) {
+                    console.error('Drop handling error:', err);
+                  }
+                }}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'space-between',
                   width: '100%',
-                  cursor: 'pointer'
+                  cursor: 'pointer',
+                  border: isDragOver ? '2px dashed var(--accent-neon, #18d5ff)' : '1px solid transparent',
+                  borderRadius: 'var(--border-radius-md, 6px)',
+                  boxSizing: 'border-box'
                 }}
               >
                 <span className="truncate" style={{ flexGrow: 1, paddingRight: '8px' }}>♫ {c.name}</span>
@@ -243,6 +282,7 @@ export default function Sidebar() {
         <div id="sidebarPlaylistsContainer" className="flex flex-col gap-1">
           {playlists.map(p => {
             const isActive = activePage === 'playlists' && selectedPlaylistId === p.id;
+            const isDragOver = dragOverPlaylistId === p.id;
             return (
               <div
                 key={p.id}
@@ -251,12 +291,44 @@ export default function Sidebar() {
                   setActivePage('playlists');
                   setSelectedPlaylistId(p.id);
                 }}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  if (dragOverPlaylistId !== p.id) {
+                    setDragOverPlaylistId(p.id);
+                  }
+                }}
+                onDragLeave={() => {
+                  setDragOverPlaylistId(null);
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragOverPlaylistId(null);
+                  try {
+                    const rawData = e.dataTransfer.getData('application/pandakey-tracks');
+                    if (rawData) {
+                      const data = JSON.parse(rawData);
+                      if (data.type === 'pandakey-tracks' && Array.isArray(data.ids)) {
+                        const newTrackIds = Array.from(new Set([...(p.trackIds || []), ...data.ids]));
+                        updatePlaylistTracks(p.id, newTrackIds);
+                        const msg = settings.language === 'th'
+                          ? `เพิ่มเพลง ${data.ids.length} เพลงลง Playlist "${p.name}" สำเร็จ`
+                          : `Successfully added ${data.ids.length} track(s) to Playlist "${p.name}"`;
+                        window.dispatchEvent(new CustomEvent('pandakey:toast', { detail: { message: msg, type: 'success' } }));
+                      }
+                    }
+                  } catch (err) {
+                    console.error('Drop handling error:', err);
+                  }
+                }}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'space-between',
                   width: '100%',
-                  cursor: 'pointer'
+                  cursor: 'pointer',
+                  border: isDragOver ? '2px dashed var(--accent-neon, #18d5ff)' : '1px solid transparent',
+                  borderRadius: 'var(--border-radius-md, 6px)',
+                  boxSizing: 'border-box'
                 }}
               >
                 <span className="truncate" style={{ flexGrow: 1, paddingRight: '8px' }}>♫ {p.name}</span>

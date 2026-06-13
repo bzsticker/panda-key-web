@@ -99,6 +99,7 @@ export default function CollectionPage() {
   const [showGrouping, setShowGrouping] = useState(false);
   const [showYear, setShowYear] = useState(false);
 
+
   // Column reordering state
   const [columnOrder, setColumnOrder] = useState<string[]>([
     'index', 'cover', 'artist', 'title', 'file', 'album', 'key', 'bpm', 'dateAdded', 'energy', 'cuePoints', 'clippedPeaks', 'volume', 'genre', 'grouping', 'year', 'time', 'action'
@@ -252,6 +253,40 @@ export default function CollectionPage() {
       window.removeEventListener('contextmenu', handleOutsideClick);
     };
   }, []);
+
+  // Listeners for Delete key and custom toasts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Delete' || e.key === 'Del') {
+        const activeEl = document.activeElement;
+        const isInputActive = activeEl && (
+          activeEl.tagName === 'INPUT' || 
+          activeEl.tagName === 'TEXTAREA' || 
+          activeEl.getAttribute('contenteditable') === 'true'
+        );
+
+        if (!isInputActive && selectedTrackIds.length > 0 && !deleteConfirmOpen) {
+          e.preventDefault();
+          setDeleteConfirmOpen(true);
+        }
+      }
+    };
+
+    const handleCustomToast = (e: Event) => {
+      const customEvent = e as CustomEvent<{ message: string; type?: 'success' | 'error' | 'info' }>;
+      if (customEvent.detail) {
+        showToast(customEvent.detail.message, customEvent.detail.type || 'info');
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('pandakey:toast', handleCustomToast);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('pandakey:toast', handleCustomToast);
+    };
+  }, [selectedTrackIds, deleteConfirmOpen]);
 
   // Selection click handlers
   const handleRowClick = (e: React.MouseEvent, track: Track, index: number) => {
@@ -986,15 +1021,29 @@ export default function CollectionPage() {
   const [localTracks, setLocalTracks] = useState<Track[]>([]);
   const [draggedRowIndex, setDraggedRowIndex] = useState<number | null>(null);
 
+
   const handleRowDragStart = (e: React.DragEvent, index: number) => {
     // Avoid triggering row drag if clicking on the row height resize handle
     if ((e.target as HTMLElement).classList.contains('row-resize-handle')) {
       e.preventDefault();
       return;
     }
+
+    const track = localTracks[index];
+    if (!track) return;
+
+    const ids = selectedTrackIds.includes(track.id)
+      ? selectedTrackIds
+      : [track.id];
+
     setDraggedRowIndex(index);
     e.dataTransfer.setData('text/plain', String(index));
-    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('application/pandakey-tracks', JSON.stringify({
+      type: 'pandakey-tracks',
+      ids,
+      index
+    }));
+    e.dataTransfer.effectAllowed = 'copyMove';
   };
 
   const handleRowDrop = (e: React.DragEvent, targetIndex: number) => {

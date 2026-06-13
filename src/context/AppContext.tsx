@@ -670,9 +670,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     const audio = audioRef.current;
     if (audio) {
-      // Point the audio element directly to our streaming API route
-      audio.src = `/api/tracks/${track.id}/audio`;
-      audio.play().catch(() => console.log('Mock Audio playback started.'));
+      try {
+        audio.pause();
+        // Point the audio element directly to our streaming API route
+        audio.src = `/api/tracks/${track.id}/audio`;
+        audio.load();
+        audio.play().catch(() => console.log('Mock Audio playback started.'));
+      } catch (err) {
+        console.error('Error starting audio playback:', err);
+      }
     }
   };
 
