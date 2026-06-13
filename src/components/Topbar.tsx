@@ -51,6 +51,12 @@ export default function Topbar() {
           {t('tab_playlists')}
         </button>
         <button 
+          className={`tab ${activePage === 'analytics' ? 'active' : ''}`}
+          onClick={() => handleTabClick('analytics')}
+        >
+          {settings.language === 'th' ? 'สถิติคลังเพลง (Analytics)' : 'Analytics'}
+        </button>
+        <button 
           className={`tab ${activePage === 'settings' ? 'active' : ''}`}
           onClick={() => handleTabClick('settings')}
         >

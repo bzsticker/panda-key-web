@@ -137,7 +137,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (pathname) {
       const parts = pathname.split('/');
       const page = parts[parts.length - 1] || 'collection';
-      if (['collection', 'tags', 'analysis', 'playlists', 'settings'].includes(page)) {
+      if (['collection', 'tags', 'analysis', 'playlists', 'settings', 'analytics'].includes(page)) {
         setActivePageState(page);
       }
     }

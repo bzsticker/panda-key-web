@@ -74,6 +74,99 @@ export default function PlaylistsPage() {
     updatePlaylistTracks(activePlaylist.id, newTrackIds);
   };
 
+  const handleMoveTrackPosition = (trackId: string, direction: 'up' | 'down') => {
+    if (!activePlaylist) return;
+    const currentTrackIds = [...activePlaylist.trackIds];
+    const index = currentTrackIds.indexOf(trackId);
+    if (index === -1) return;
+    
+    if (direction === 'up' && index > 0) {
+      const temp = currentTrackIds[index];
+      currentTrackIds[index] = currentTrackIds[index - 1];
+      currentTrackIds[index - 1] = temp;
+    } else if (direction === 'down' && index < currentTrackIds.length - 1) {
+      const temp = currentTrackIds[index];
+      currentTrackIds[index] = currentTrackIds[index + 1];
+      currentTrackIds[index + 1] = temp;
+    }
+    
+    updatePlaylistTracks(activePlaylist.id, currentTrackIds);
+  };
+
+  const renderEnergyFlowChart = () => {
+    if (playlistTracks.length < 2) return null;
+    
+    const width = 500;
+    const height = 65;
+    const padding = 10;
+    const chartWidth = width - padding * 2;
+    const chartHeight = height - padding * 2;
+    
+    const points = playlistTracks.map((track, idx) => {
+      const x = padding + (idx / (playlistTracks.length - 1)) * chartWidth;
+      const energy = track.energy || 5;
+      const y = padding + chartHeight - ((energy - 1) / 9) * chartHeight;
+      return { x, y, energy, title: track.title };
+    });
+    
+    const pathD = points.reduce((acc, p, idx) => {
+      return acc + `${idx === 0 ? 'M' : 'L'} ${p.x} ${p.y}`;
+    }, '');
+    
+    return (
+      <div className="energy-flow-chart-container mb-4" style={{ padding: '12px', background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--panel-border)', borderRadius: 'var(--border-radius-md)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+          <span style={{ fontSize: '11.5px', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+            {settings.language === 'th' ? 'กราฟเส้นแสดงทิศทางพลังงาน (Setlist Energy Curve)' : 'Setlist Energy Flow Curve'}
+          </span>
+          <span style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>
+            {settings.language === 'th' ? `พลังงานเฉลี่ย: ${(playlistTracks.reduce((acc, t) => acc + (t.energy || 5), 0) / playlistTracks.length).toFixed(1)}/10` : `Average Energy: ${(playlistTracks.reduce((acc, t) => acc + (t.energy || 5), 0) / playlistTracks.length).toFixed(1)}/10`}
+          </span>
+        </div>
+        <div style={{ position: 'relative', width: '100%', height: `${height}px` }}>
+          <svg viewBox={`0 0 ${width} ${height}`} width="100%" height="100%" style={{ overflow: 'visible' }}>
+            <defs>
+              <linearGradient id="energyCurveGlow" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0%" stopColor="var(--accent-green)" />
+                <stop offset="50%" stopColor="var(--accent-yellow)" />
+                <stop offset="100%" stopColor="var(--accent-red)" />
+              </linearGradient>
+            </defs>
+            
+            <line x1={padding} y1={padding} x2={width - padding} y2={padding} stroke="rgba(255, 255, 255, 0.05)" strokeWidth="0.5" />
+            <line x1={padding} y1={padding + chartHeight / 2} x2={width - padding} y2={padding + chartHeight / 2} stroke="rgba(255, 255, 255, 0.05)" strokeWidth="0.5" />
+            <line x1={padding} y1={padding + chartHeight} x2={width - padding} y2={padding + chartHeight} stroke="rgba(255, 255, 255, 0.05)" strokeWidth="0.5" />
+            
+            <path
+              d={pathD}
+              fill="none"
+              stroke="url(#energyCurveGlow)"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              style={{ filter: 'drop-shadow(0px 0px 4px rgba(255, 100, 0, 0.3))' }}
+            />
+            
+            {points.map((p, idx) => (
+              <circle
+                key={idx}
+                cx={p.x}
+                cy={p.y}
+                r="4"
+                fill="#ffffff"
+                stroke="var(--bg-primary)"
+                strokeWidth="1.5"
+                style={{ cursor: 'pointer' }}
+              >
+                <title>{`${p.title} (Energy: ${p.energy})`}</title>
+              </circle>
+            ))}
+          </svg>
+        </div>
+      </div>
+    );
+  };
+
   const handleExportPlaylist = () => {
     if (!activePlaylist) return;
     // Download playlist as M3U format
@@ -224,6 +317,9 @@ export default function PlaylistsPage() {
                   <button className="small-btn danger-btn py-1 px-3 text-xs" onClick={handleDeletePlaylist}>{t('delete_playlist')}</button>
                 </div>
               </div>
+              
+              {renderEnergyFlowChart()}
+              
               <div className="playlist-table-wrapper flex-grow overflow-y-auto mt-4">
                 <table>
                   <thead>
@@ -258,14 +354,34 @@ export default function PlaylistsPage() {
                             <td title={`${track.bpm} BPM`}>{track.bpm}</td>
                             <td title={String(track.energy)}>{track.energy}</td>
                             <td title={formatDuration(track.duration)}>{formatDuration(track.duration)}</td>
-                            <td className="text-center">
-                              <button 
-                                className="small-btn danger-btn py-0.5 px-2 text-xs"
-                                onClick={() => handleRemoveTrack(track.id)}
-                              >
-                                {t('playlist_table_remove_btn')}
-                              </button>
-                            </td>
+                             <td className="text-center">
+                               <div style={{ display: 'flex', gap: '4px', justifyContent: 'center', alignItems: 'center' }}>
+                                 <button 
+                                   className="small-btn py-0.5 px-1.5 text-xs"
+                                   onClick={(e) => { e.stopPropagation(); handleMoveTrackPosition(track.id, 'up'); }}
+                                   disabled={idx === 0}
+                                   title="Move Up"
+                                   style={{ minWidth: '22px' }}
+                                 >
+                                   ▲
+                                 </button>
+                                 <button 
+                                   className="small-btn py-0.5 px-1.5 text-xs"
+                                   onClick={(e) => { e.stopPropagation(); handleMoveTrackPosition(track.id, 'down'); }}
+                                   disabled={idx === playlistTracks.length - 1}
+                                   title="Move Down"
+                                   style={{ minWidth: '22px' }}
+                                 >
+                                   ▼
+                                 </button>
+                                 <button 
+                                   className="small-btn danger-btn py-0.5 px-2 text-xs"
+                                   onClick={(e) => { e.stopPropagation(); handleRemoveTrack(track.id); }}
+                                 >
+                                   {t('playlist_table_remove_btn')}
+                                 </button>
+                               </div>
+                             </td>
                           </tr>
                         );
                       })
