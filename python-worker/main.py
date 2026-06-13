@@ -29,8 +29,9 @@ API_SECRET = os.getenv("API_SECRET", "pandakey_super_secret_token_123!")
 
 # Note Names & Key Profile Definitions
 NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
-MAJOR_PROFILE = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88])
-MINOR_PROFILE = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17])
+# Sha'ath Key Profiles (specifically optimized for Electronic & Pop music)
+MAJOR_PROFILE = np.array([7.239, 3.504, 3.584, 2.845, 5.819, 4.559, 2.448, 6.995, 3.391, 4.556, 4.074, 4.459])
+MINOR_PROFILE = np.array([7.151, 2.524, 3.548, 7.200, 3.391, 3.840, 2.502, 7.027, 3.493, 3.012, 2.428, 3.473])
 
 CAMELOT_MAJOR = {
     'C': '8B', 'C#': '3B', 'Db': '3B', 'D': '10B', 'D#': '5B', 'Eb': '5B', 'E': '12B', 'F': '7B',
@@ -157,9 +158,66 @@ def extract_cover_art(file_path):
     return None
 
 
+def estimate_precise_bpm(y, sr, hop_length=256):
+    # 1. Get rough tempo using librosa's robust estimator
+    rough_tempos = librosa.feature.tempo(y=y, sr=sr, hop_length=hop_length, start_bpm=120)
+    rough_tempo = float(rough_tempos[0] if isinstance(rough_tempos, (np.ndarray, list)) else rough_tempos)
+    
+    # 2. Compute onset envelope of percussive component to focus on beat transients
+    y_percussive = librosa.effects.percussive(y)
+    onset_env = librosa.onset.onset_strength(y=y_percussive, sr=sr, hop_length=hop_length)
+    
+    # 3. Compute autocorrelation
+    max_lag = int(np.ceil(60.0 * sr / (hop_length * 40.0)))
+    ac = librosa.autocorrelate(onset_env, max_size=max_lag)
+    
+    # 4. Find the lag corresponding to the rough tempo
+    rough_lag = 60.0 * sr / (hop_length * rough_tempo)
+    
+    # 5. Search for the local peak in the autocorrelation around rough_lag (+/- 4 lags)
+    rough_lag_idx = int(round(rough_lag))
+    search_min = max(1, rough_lag_idx - 4)
+    search_max = min(len(ac) - 2, rough_lag_idx + 4)
+    
+    if search_min >= search_max:
+        return rough_tempo
+        
+    local_slice = ac[search_min:search_max+1]
+    local_peak_relative = np.argmax(local_slice)
+    peak_idx = search_min + local_peak_relative
+    
+    # 6. Perform parabolic interpolation on the local peak
+    if 0 < peak_idx < len(ac) - 1:
+        alpha = ac[peak_idx - 1]
+        beta = ac[peak_idx]
+        gamma = ac[peak_idx + 1]
+        
+        denom = alpha - 2 * beta + gamma
+        if abs(denom) > 1e-5:
+            p = 0.5 * (alpha - gamma) / denom
+            p = np.clip(p, -0.5, 0.5)
+            interpolated_lag = peak_idx + p
+        else:
+            interpolated_lag = peak_idx
+    else:
+        interpolated_lag = peak_idx
+        
+    # 7. Compute precise BPM from the interpolated fractional lag
+    precise_bpm = 60.0 * sr / (hop_length * interpolated_lag)
+    
+    # Sanity check: if the precise BPM is way off from rough_tempo, fallback to rough_tempo
+    if abs(precise_bpm - rough_tempo) > 10.0:
+        return rough_tempo
+        
+    return precise_bpm
+
+
 def estimate_key(y, sr):
-    # Chroma energy computation
-    chroma = librosa.feature.chroma_cqt(y=y, sr=sr)
+    # Separate harmonic component to remove percussion noise for more accurate key detection
+    y_harmonic = librosa.effects.harmonic(y)
+    
+    # Chroma energy computation on harmonic component
+    chroma = librosa.feature.chroma_cqt(y=y_harmonic, sr=sr)
     chroma_mean = np.mean(chroma, axis=1)
     
     best_corr = -1
@@ -229,8 +287,8 @@ def run_audio_analysis(req: AnalysisRequest):
         # Step 3: Load audio with librosa for BPM/Key
         print(f"[Worker] Loading audio file: {temp_file_path}")
         update_job_status(req.job_id, 50, "กำลังคำนวณค่าจังหวะเพลง (BPM)...")
-        # Load at standard sample rate 22050 to avoid librosa CQT Nyquist limit error on low sample rate files
-        y, sr = librosa.load(temp_file_path, sr=22050)
+        # Load at standard sample rate 44100 for high temporal resolution BPM and CQT key detection
+        y, sr = librosa.load(temp_file_path, sr=44100)
         print(f"[Worker] Audio loaded. Sample rate: {sr}, shape: {y.shape}")
         duration = float(librosa.get_duration(y=y, sr=sr))
         print(f"[Worker] Audio duration: {duration} seconds")
@@ -244,7 +302,7 @@ def run_audio_analysis(req: AnalysisRequest):
 
         # 1. Loudness (L)
         loudness_db = 20 * np.log10(mean_rms + 1e-6)
-        L = np.clip((loudness_db - (-28.0)) / (-8.0 - (-28.0)), 0.0, 1.0)
+        L = np.clip((loudness_db - (-26.0)) / (-6.0 - (-26.0)), 0.0, 1.0)
 
         # 2. Beat Strength (B)
         onset_env = librosa.onset.onset_strength(y=y, sr=sr)
@@ -253,12 +311,12 @@ def run_audio_analysis(req: AnalysisRequest):
             beat_strength = float(np.mean(onset_env[beats]))
         else:
             beat_strength = float(np.mean(onset_env))
-        B = np.clip((beat_strength - 1.0) / (3.5 - 1.0), 0.0, 1.0)
+        B = np.clip((beat_strength - 0.8) / (4.5 - 0.8), 0.0, 1.0)
 
         # 3. Onset Density (O)
         onsets = librosa.onset.onset_detect(onset_envelope=onset_env, sr=sr)
         onset_rate = len(onsets) / (duration if duration > 0 else 1.0)
-        O = np.clip((onset_rate - 1.5) / (5.5 - 1.5), 0.0, 1.0)
+        O = np.clip((onset_rate - 1.0) / (6.5 - 1.0), 0.0, 1.0)
 
         # 4. Bass Energy (F)
         stft = np.abs(librosa.stft(y))
@@ -268,17 +326,17 @@ def run_audio_analysis(req: AnalysisRequest):
             bass_energy = float(np.mean(stft[bass_bins, :]))
         else:
             bass_energy = 0.0
-        F = np.clip((bass_energy - 0.02) / (0.15 - 0.02), 0.0, 1.0)
+        F = np.clip((bass_energy - 0.01) / (0.25 - 0.01), 0.0, 1.0)
 
         # 5. Spectral Brightness (S)
         spectral_centroid = librosa.feature.spectral_centroid(y=y, sr=sr)
         mean_centroid = float(np.mean(spectral_centroid))
-        S = np.clip((mean_centroid - 1200.0) / (3200.0 - 1200.0), 0.0, 1.0)
+        S = np.clip((mean_centroid - 1000.0) / (3500.0 - 1000.0), 0.0, 1.0)
 
         # 6. Compression / Dynamic Range (C)
         rms_db = 20 * np.log10(rms + 1e-6)
         rms_std = float(np.std(rms_db))
-        C = 1.0 - np.clip((rms_std - 2.0) / (7.0 - 2.0), 0.0, 1.0)
+        C = 1.0 - np.clip((rms_std - 1.5) / (8.0 - 1.5), 0.0, 1.0)
 
         bpm = 0
         musical_key = "--"
@@ -292,8 +350,7 @@ def run_audio_analysis(req: AnalysisRequest):
         else:
             # Estimate BPM
             print("[Worker] Estimating BPM...")
-            tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
-            bpm = int(round(float(tempo[0] if isinstance(tempo, (np.ndarray, list)) else tempo)))
+            bpm = int(round(estimate_precise_bpm(y, sr)))
             print(f"[Worker] Estimated BPM: {bpm}")
 
             # Step 4: Estimate musical key
