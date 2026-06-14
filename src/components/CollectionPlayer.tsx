@@ -53,7 +53,8 @@ export default function CollectionPlayer() {
     audioRef,
     settings,
     cues,
-    saveCues
+    saveCues,
+    fetchLibrary
   } = useApp();
 
   const zoomedCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -63,6 +64,9 @@ export default function CollectionPlayer() {
 
   // Drag-to-seek Refs
   const isDraggingOverviewRef = useRef(false);
+  const isDraggingZoomedRef = useRef(false);
+  const dragStartClientXRef = useRef(0);
+  const dragStartAudioTimeRef = useRef(0);
   const seekFromMouseEventRef = useRef<(clientX: number) => void>(() => {});
 
   // DJ Player States
@@ -282,6 +286,14 @@ export default function CollectionPlayer() {
   }, [isReverseActive, isPlaying, audioRef]);
 
   // Sync refs to avoid restarting the useEffect animation loop and causing stutter
+  let initialGridOffset = 0;
+  if (currentTrack?.comments) {
+    const match = currentTrack.comments.match(/\[grid_offset=(-?\d+(?:\.\d+)?)\]/);
+    if (match) {
+      initialGridOffset = parseFloat(match[1]);
+    }
+  }
+
   const drawParamsRef = useRef({
     loopStart,
     loopEnd,
@@ -293,10 +305,18 @@ export default function CollectionPlayer() {
     isPlaying,
     currentTime,
     durationSeconds: durationSeconds || currentTrack?.duration || 180,
-    bpm: currentTrack?.bpm || 0
+    bpm: currentTrack?.bpm || 0,
+    gridOffset: initialGridOffset
   });
 
   useEffect(() => {
+    let gridOffset = 0;
+    if (currentTrack?.comments) {
+      const match = currentTrack.comments.match(/\[grid_offset=(-?\d+(?:\.\d+)?)\]/);
+      if (match) {
+        gridOffset = parseFloat(match[1]);
+      }
+    }
     drawParamsRef.current = {
       loopStart,
       loopEnd,
@@ -308,7 +328,8 @@ export default function CollectionPlayer() {
       isPlaying,
       currentTime,
       durationSeconds: durationSeconds || currentTrack?.duration || 180,
-      bpm: currentTrack?.bpm || 0
+      bpm: currentTrack?.bpm || 0,
+      gridOffset
     };
   }, [loopStart, loopEnd, isLoopActive, inFluxState, fluxStartRealTime, fluxStartAudioTime, cues, isPlaying, currentTime, durationSeconds, currentTrack]);
 
@@ -399,27 +420,34 @@ export default function CollectionPlayer() {
       // Draw Beat Grid Lines based on BPM
       if (params.bpm) {
         const beatSecs = 60 / params.bpm;
+        const offset = params.gridOffset || 0;
         
         // Find visible beat indices
-        const firstVisibleBeat = Math.floor(startT / beatSecs);
-        const lastVisibleBeat = Math.ceil((startT + zoomWindow) / beatSecs);
+        const firstVisibleBeat = Math.floor((startT - offset) / beatSecs);
+        const lastVisibleBeat = Math.ceil((startT + zoomWindow - offset) / beatSecs);
 
-        zCtx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
-        zCtx.lineWidth = 1;
         zCtx.font = 'bold 8px monospace';
-        zCtx.fillStyle = 'rgba(255, 255, 255, 0.3)';
 
         for (let b = firstVisibleBeat; b <= lastVisibleBeat; b++) {
-          const beatTime = b * beatSecs;
-          const x = ((beatTime - startT) / zoomWindow) * zw;
-          if (x >= 0 && x <= zw) {
-            zCtx.beginPath();
-            zCtx.moveTo(x, 0);
-            zCtx.lineTo(x, zh);
-            zCtx.stroke();
+          const beatTime = offset + b * beatSecs;
+          if (beatTime >= 0) {
+            const x = ((beatTime - startT) / zoomWindow) * zw;
+            if (x >= 0 && x <= zw) {
+              const isDownbeat = b % 4 === 0;
+              zCtx.strokeStyle = isDownbeat ? 'rgba(0, 191, 255, 0.3)' : 'rgba(255, 255, 255, 0.1)';
+              zCtx.lineWidth = isDownbeat ? 1.5 : 1;
+              
+              zCtx.beginPath();
+              zCtx.moveTo(x, 0);
+              zCtx.lineTo(x, zh);
+              zCtx.stroke();
 
-            // Beat number label
-            zCtx.fillText(String(b + 1), x + 4, 10);
+              // Beat number label: e.g. bar.beat (1.1, 1.2, 1.3, 1.4, 2.1)
+              zCtx.fillStyle = isDownbeat ? 'rgba(0, 191, 255, 0.5)' : 'rgba(255, 255, 255, 0.25)';
+              const barNum = Math.floor(b / 4) + 1;
+              const beatNum = (b % 4) + 1;
+              zCtx.fillText(`${barNum}.${beatNum}`, x + 4, 10);
+            }
           }
         }
       }
@@ -563,6 +591,75 @@ export default function CollectionPlayer() {
     seekFromMouseEventRef.current(e.clientX);
   };
 
+  const handleZoomedMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    isDraggingZoomedRef.current = true;
+    dragStartClientXRef.current = e.clientX;
+    const activeTime = audioRef.current ? audioRef.current.currentTime : currentTime;
+    dragStartAudioTimeRef.current = activeTime;
+  };
+
+  const handleZoomedTouchStart = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    if (e.touches.length !== 1) return;
+    isDraggingZoomedRef.current = true;
+    dragStartClientXRef.current = e.touches[0].clientX;
+    const activeTime = audioRef.current ? audioRef.current.currentTime : currentTime;
+    dragStartAudioTimeRef.current = activeTime;
+  };
+
+  // Beat Grid Editor functions
+  const handleShiftGrid = async (amount: number) => {
+    if (!currentTrack) return;
+    
+    let gridOffset = 0;
+    let baseComments = currentTrack.comments || '';
+    const match = baseComments.match(/\[grid_offset=(-?\d+(?:\.\d+)?)\]/);
+    if (match) {
+      gridOffset = parseFloat(match[1]);
+      baseComments = baseComments.replace(/\[grid_offset=(-?\d+(?:\.\d+)?)\]/, '').trim();
+    }
+    
+    const newOffset = Math.max(-10, Math.min(10, gridOffset + amount));
+    const newComments = `${baseComments} [grid_offset=${newOffset.toFixed(3)}]`.trim();
+    
+    try {
+      const res = await fetch(`/api/tracks/${currentTrack.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ comments: newComments })
+      });
+      if (res.ok) {
+        fetchLibrary();
+      }
+    } catch (err) {
+      console.error('Failed to shift beat grid:', err);
+    }
+  };
+
+  const handleSetFirstBeat = async () => {
+    if (!currentTrack) return;
+    
+    let baseComments = currentTrack.comments || '';
+    baseComments = baseComments.replace(/\[grid_offset=(-?\d+(?:\.\d+)?)\]/, '').trim();
+    
+    const activeTime = audioRef.current ? audioRef.current.currentTime : currentTime;
+    const newOffset = activeTime;
+    const newComments = `${baseComments} [grid_offset=${newOffset.toFixed(3)}]`.trim();
+    
+    try {
+      const res = await fetch(`/api/tracks/${currentTrack.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ comments: newComments })
+      });
+      if (res.ok) {
+        fetchLibrary();
+      }
+    } catch (err) {
+      console.error('Failed to set first beat downbeat:', err);
+    }
+  };
+
   useEffect(() => {
     seekFromMouseEventRef.current = (clientX: number) => {
       const canvas = overviewCanvasRef.current;
@@ -578,23 +675,71 @@ export default function CollectionPlayer() {
     const handleWindowMouseMove = (e: MouseEvent) => {
       if (isDraggingOverviewRef.current) {
         seekFromMouseEventRef.current(e.clientX);
+      } else if (isDraggingZoomedRef.current) {
+        const canvas = zoomedCanvasRef.current;
+        if (canvas) {
+          const rect = canvas.getBoundingClientRect();
+          const zw = rect.width || canvas.width || 800;
+          const dx = e.clientX - dragStartClientXRef.current;
+          
+          // zoomWindow is 12 seconds
+          const zoomWindow = 12;
+          const dt = - (dx / zw) * zoomWindow;
+          const dur = durationSeconds || currentTrack?.duration || 180;
+          const targetTime = Math.max(0, Math.min(dur, dragStartAudioTimeRef.current + dt));
+          
+          seekPlayer(targetTime);
+          if (audioRef.current) {
+            audioRef.current.currentTime = targetTime;
+          }
+        }
+      }
+    };
+
+    const handleWindowTouchMove = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return;
+      const clientX = e.touches[0].clientX;
+      if (isDraggingOverviewRef.current) {
+        seekFromMouseEventRef.current(clientX);
+      } else if (isDraggingZoomedRef.current) {
+        const canvas = zoomedCanvasRef.current;
+        if (canvas) {
+          const rect = canvas.getBoundingClientRect();
+          const zw = rect.width || canvas.width || 800;
+          const dx = clientX - dragStartClientXRef.current;
+          
+          const zoomWindow = 12;
+          const dt = - (dx / zw) * zoomWindow;
+          const dur = durationSeconds || currentTrack?.duration || 180;
+          const targetTime = Math.max(0, Math.min(dur, dragStartAudioTimeRef.current + dt));
+          
+          seekPlayer(targetTime);
+          if (audioRef.current) {
+            audioRef.current.currentTime = targetTime;
+          }
+        }
       }
     };
 
     const handleWindowMouseUp = () => {
       isDraggingOverviewRef.current = false;
+      isDraggingZoomedRef.current = false;
     };
 
     window.addEventListener('mousemove', handleWindowMouseMove);
     window.addEventListener('mouseup', handleWindowMouseUp);
     window.addEventListener('blur', handleWindowMouseUp);
+    window.addEventListener('touchmove', handleWindowTouchMove, { passive: true });
+    window.addEventListener('touchend', handleWindowMouseUp);
 
     return () => {
       window.removeEventListener('mousemove', handleWindowMouseMove);
       window.removeEventListener('mouseup', handleWindowMouseUp);
       window.removeEventListener('blur', handleWindowMouseUp);
+      window.removeEventListener('touchmove', handleWindowTouchMove);
+      window.removeEventListener('touchend', handleWindowMouseUp);
     };
-  }, []);
+  }, [durationSeconds, currentTrack]);
 
   // Pioneer DJ CUE Button logic
   const handleCueMouseDown = () => {
@@ -846,7 +991,13 @@ export default function CollectionPlayer() {
         )}
         {/* A. Zoomed scrolling Waveform */}
         <div className="col-zoomed-wrapper">
-          <canvas ref={zoomedCanvasRef} className="col-zoomed-canvas" />
+          <canvas 
+            ref={zoomedCanvasRef} 
+            className="col-zoomed-canvas" 
+            onMouseDown={handleZoomedMouseDown}
+            onTouchStart={handleZoomedTouchStart}
+            style={{ cursor: 'grab' }}
+          />
         </div>
         {/* B. Overview Waveform */}
         <div className="col-overview-wrapper">
@@ -930,6 +1081,14 @@ export default function CollectionPlayer() {
           >
             🔄
           </button>
+        </div>
+
+        {/* Beat Grid Editor Controls */}
+        <div className="col-dj-grid-group">
+          <span className="col-grid-label">GRID</span>
+          <button onClick={() => handleShiftGrid(-0.01)} className="col-btn-grid-val" title="Shift Grid Left (-10ms)">◀</button>
+          <button onClick={handleSetFirstBeat} className="col-btn-grid-val font-bold" style={{ fontSize: '9px' }} title="Set First Beat (Downbeat)">SET 1st</button>
+          <button onClick={() => handleShiftGrid(0.01)} className="col-btn-grid-val" title="Shift Grid Right (+10ms)">▶</button>
         </div>
       </div>
 
