@@ -5,6 +5,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useApp, Track } from '@/context/AppContext';
 import { getTranslation } from '@/lib/translations';
 import { getCompatibleCamelotKeys } from '@/lib/keys';
+import CollectionPlayer from '@/components/CollectionPlayer';
 
 // Helper to compute deterministic mockup stats for track columns
 function getProfessionalAudioStats(trackId: string) {
@@ -2217,6 +2218,8 @@ export default function CollectionPage() {
           </div>
         ))}
       </div>
+
+      <CollectionPlayer />
     </section>
   );
 }

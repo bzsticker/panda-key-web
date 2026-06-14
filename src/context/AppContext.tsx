@@ -137,7 +137,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (pathname) {
       const parts = pathname.split('/');
       const page = parts[parts.length - 1] || 'collection';
-      if (['collection', 'tags', 'analysis', 'playlists', 'settings', 'analytics'].includes(page)) {
+      if (['collection', 'tags', 'analysis', 'playlists', 'settings', 'analytics', 'edit'].includes(page)) {
         setActivePageState(page);
       }
     }
@@ -216,6 +216,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
+  const endedHandlerRef = useRef<() => void>(() => {});
+
+  endedHandlerRef.current = () => {
+    if (loop) {
+      const audio = audioRef.current;
+      if (audio) {
+        audio.currentTime = 0;
+        audio.play().catch(() => setIsPlaying(false));
+      }
+    } else if (settings.autoPlay) {
+      playNext();
+    } else {
+      setIsPlaying(false);
+    }
+  };
 
   // Initialize HTML5 Audio
   useEffect(() => {
@@ -224,7 +239,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const audio = audioRef.current;
     audio.volume = volume;
     
+    let lastTimeUpdate = 0;
     const handleTimeUpdate = () => {
+      const now = Date.now();
+      if (now - lastTimeUpdate >= 200) {
+        setCurrentTime(audio.currentTime);
+        lastTimeUpdate = now;
+      }
+    };
+
+    const handlePause = () => {
+      setCurrentTime(audio.currentTime);
+    };
+
+    const handleSeeked = () => {
       setCurrentTime(audio.currentTime);
     };
 
@@ -233,27 +261,24 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     };
 
     const handleEnded = () => {
-      if (loop) {
-        audio.currentTime = 0;
-        audio.play().catch(() => setIsPlaying(false));
-      } else if (settings.autoPlay) {
-        playNext();
-      } else {
-        setIsPlaying(false);
-      }
+      endedHandlerRef.current();
     };
 
     audio.addEventListener('timeupdate', handleTimeUpdate);
+    audio.addEventListener('pause', handlePause);
+    audio.addEventListener('seeked', handleSeeked);
     audio.addEventListener('loadedmetadata', handleLoadedMetadata);
     audio.addEventListener('ended', handleEnded);
 
     return () => {
       audio.pause();
       audio.removeEventListener('timeupdate', handleTimeUpdate);
+      audio.removeEventListener('pause', handlePause);
+      audio.removeEventListener('seeked', handleSeeked);
       audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
       audio.removeEventListener('ended', handleEnded);
     };
-  }, [loop, settings.autoPlay, tracks, selectedTrackId]);
+  }, []);
 
   // Sync player state with audio element
   useEffect(() => {
@@ -701,7 +726,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     
     if (list.length === 0) return;
     
-    const currentIndex = list.findIndex(t => t.id === selectedTrackId);
+    const currentIndex = list.findIndex(t => t.id === (currentTrack?.id || selectedTrackId));
     const nextIndex = (currentIndex + 1) % list.length;
     playTrack(list[nextIndex]);
   };
@@ -717,7 +742,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     
     if (list.length === 0) return;
     
-    const currentIndex = list.findIndex(t => t.id === selectedTrackId);
+    const currentIndex = list.findIndex(t => t.id === (currentTrack?.id || selectedTrackId));
     let prevIndex = currentIndex - 1;
     if (prevIndex < 0) prevIndex = list.length - 1;
     playTrack(list[prevIndex]);

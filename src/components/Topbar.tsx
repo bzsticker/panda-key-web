@@ -51,6 +51,12 @@ export default function Topbar() {
           {t('tab_playlists')}
         </button>
         <button 
+          className={`tab ${activePage === 'edit' ? 'active' : ''}`}
+          onClick={() => handleTabClick('edit')}
+        >
+          {t('tab_edit')}
+        </button>
+        <button 
           className={`tab ${activePage === 'analytics' ? 'active' : ''}`}
           onClick={() => handleTabClick('analytics')}
         >

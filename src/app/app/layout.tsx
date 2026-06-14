@@ -5,7 +5,6 @@ import React from 'react';
 import { AppProvider } from '@/context/AppContext';
 import Sidebar from '@/components/Sidebar';
 import Topbar from '@/components/Topbar';
-import MiniPlayer from '@/components/MiniPlayer';
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -22,9 +21,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           <div style={{ flex: '1', overflowY: 'auto', overflowX: 'hidden', padding: '24px 24px 0 24px', display: 'flex', flexDirection: 'column' }}>
             {children}
           </div>
-          
-          {/* Persistent Mini Player at the bottom */}
-          <MiniPlayer />
         </main>
       </div>
     </AppProvider>

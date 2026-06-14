@@ -77,6 +77,15 @@ export default function MiniPlayer() {
   const [prevVolume, setPrevVolume] = useState(0.8);
   const [isMuted, setIsMuted] = useState(false);
 
+  // DJ Deck States
+  const [pitchOffset, setPitchOffset] = useState(0); // -10% to +10%
+  const [isNudging, setIsNudging] = useState(0); // temporary speed adjustment (-0.03 or 0.03)
+  const [keyLock, setKeyLock] = useState(true); // preserves pitch
+  const [djCuePoint, setDjCuePoint] = useState(0); // temporary cue point
+  const [loopStart, setLoopStart] = useState<number | null>(null);
+  const [loopEnd, setLoopEnd] = useState<number | null>(null);
+  const [isLoopActive, setIsLoopActive] = useState(false);
+
   // Edit Cue Modal State
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [selectedCueForEdit, setSelectedCueForEdit] = useState<any>(null);
@@ -95,11 +104,79 @@ export default function MiniPlayer() {
   const dragStartCueTimeRef = useRef(0);
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+  const isLoopActiveRef = useRef(isLoopActive);
+  const loopStartRef = useRef(loopStart);
+  const loopEndRef = useRef(loopEnd);
+  const isCuePreviewingRef = useRef(false);
+
   useEffect(() => {
     currentTimeRef.current = currentTime;
     cuesRef.current = cues;
     currentTrackRef.current = currentTrack;
   }, [currentTime, cues, currentTrack]);
+
+  useEffect(() => {
+    isLoopActiveRef.current = isLoopActive;
+    loopStartRef.current = loopStart;
+    loopEndRef.current = loopEnd;
+  }, [isLoopActive, loopStart, loopEnd]);
+
+  // Reset DJ state on track change
+  useEffect(() => {
+    setPitchOffset(0);
+    setIsNudging(0);
+    setDjCuePoint(0);
+    setLoopStart(null);
+    setLoopEnd(null);
+    setIsLoopActive(false);
+  }, [currentTrack?.id]);
+
+  // Sync Audio Properties (Tempo, Key Lock, Nudging)
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    // Apply Key Lock (preserves pitch)
+    audio.preservesPitch = keyLock;
+    (audio as any).mozPreservesPitch = keyLock;
+    (audio as any).webkitPreservesPitch = keyLock;
+
+    // Calculate actual speed based on pitch slider and nudging
+    const baseRate = 1 + (pitchOffset / 100);
+    const actualRate = baseRate + isNudging;
+    const clampedRate = Math.max(0.06, Math.min(16.0, actualRate));
+    
+    audio.playbackRate = clampedRate;
+
+    if (wavesurfer) {
+      wavesurfer.setPlaybackRate(clampedRate);
+    }
+  }, [pitchOffset, isNudging, keyLock, wavesurfer, currentTrack?.id, audioRef]);
+
+  // High-precision loop checker (runs on animation frames)
+  useEffect(() => {
+    let animFrameId: number;
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    const checkLoop = () => {
+      if (isLoopActiveRef.current && loopStartRef.current !== null && loopEndRef.current !== null) {
+        if (audio.currentTime >= loopEndRef.current) {
+          audio.currentTime = loopStartRef.current;
+          seekPlayer(loopStartRef.current);
+        }
+      }
+      animFrameId = requestAnimationFrame(checkLoop);
+    };
+
+    if (isPlaying) {
+      animFrameId = requestAnimationFrame(checkLoop);
+    }
+
+    return () => {
+      cancelAnimationFrame(animFrameId);
+    };
+  }, [isPlaying, seekPlayer, audioRef]);
 
   // 1. Initialize WaveSurfer client-side
   useEffect(() => {
@@ -164,9 +241,6 @@ export default function MiniPlayer() {
     const initTimeline = async () => {
       const { default: TimelinePlugin } = await import('wavesurfer.js/dist/plugins/timeline.js');
 
-      // We pass a dynamic configuration object with getters to handle values safely.
-      // In wavesurfer.js v7, options are evaluated when drawing/redrawing.
-      // Returning Infinity for timeInterval during loading avoids infinite loops when duration is 0, NaN, or Infinity.
       const timelineOptions = {
         container: timelineContainerRef.current!,
         height: 20,
@@ -296,11 +370,18 @@ export default function MiniPlayer() {
 
     // Define handlers first so they can be attached directly in the loop
     const handleDragStart = (region: any) => {
+      if (region.id === 'active-loop') return;
       isDraggingRef.current = true;
       dragStartCueTimeRef.current = region.start;
     };
 
     const handleRegionUpdated = (region: any) => {
+      if (region.id === 'active-loop') {
+        setLoopStart(region.start);
+        setLoopEnd(region.end);
+        return;
+      }
+
       // Update DOM text directly for performance to avoid lag during drag
       const timeEl = region.element?.querySelector('.cue-flag-time');
       if (timeEl) {
@@ -332,11 +413,13 @@ export default function MiniPlayer() {
 
     const handleRegionClicked = (region: any, e: MouseEvent) => {
       e.stopPropagation();
+      if (region.id === 'active-loop') return;
       seekPlayer(region.start);
     };
 
     const handleRegionDoubleClicked = (region: any, e: MouseEvent) => {
       e.stopPropagation();
+      if (region.id === 'active-loop') return;
       const cue = cuesRef.current.find(c => c.id === region.id);
       if (!cue) return;
       setSelectedCueForEdit(cue);
@@ -348,6 +431,7 @@ export default function MiniPlayer() {
     const handleContextMenu = (region: any, e: MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();
+      if (region.id === 'active-loop') return;
       if (!currentTrackRef.current) return;
       
       const confirmDelete = window.confirm(
@@ -363,7 +447,12 @@ export default function MiniPlayer() {
     };
 
     // Clear existing regions to prevent duplication
+    // Keep active loop region if it exists
+    const loopRegion = regionsPlugin.getRegions().find((r: any) => r.id === 'active-loop');
     regionsPlugin.clearRegions();
+    if (loopRegion) {
+      regionsPlugin.addRegion(loopRegion);
+    }
 
     // Create regions and attach handlers directly
     cues.forEach(cue => {
@@ -399,9 +488,40 @@ export default function MiniPlayer() {
 
   }, [cues, regionsPlugin, wavesurfer]);
 
-  // 4. Render Beat Grid Overlay (Disabled/Removed)
+  // Manage Visual Loop Region in WaveSurfer
+  useEffect(() => {
+    if (!regionsPlugin) return;
 
-  // 5. Global Keyboard Hotkeys (1-8 to jump, Shift + 1-8 to record)
+    const loopRegionId = 'active-loop';
+
+    try {
+      const existing = regionsPlugin.getRegions().find((r: any) => r.id === loopRegionId);
+      if (existing) {
+        existing.remove();
+      }
+    } catch (e) {}
+
+    if (isLoopActive && loopStart !== null && loopEnd !== null) {
+      try {
+        const reg = regionsPlugin.addRegion({
+          id: loopRegionId,
+          start: loopStart,
+          end: loopEnd,
+          color: 'rgba(76, 217, 100, 0.18)', // transparent green
+          drag: true,
+          resize: true
+        });
+        if (reg.element) {
+          reg.element.style.borderLeft = '2px solid #4cd964';
+          reg.element.style.borderRight = '2px solid #4cd964';
+        }
+      } catch (e) {
+        console.error('Error adding loop region:', e);
+      }
+    }
+  }, [isLoopActive, loopStart, loopEnd, regionsPlugin]);
+
+  // Global Keyboard Hotkeys (1-8 to jump, Shift + 1-8 to record)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
@@ -455,35 +575,168 @@ export default function MiniPlayer() {
     };
   }, [saveCues]);
 
-  // Add Cue Point helper
-  const handleAddCue = () => {
-    if (!currentTrack) return;
-    
-    // Find first empty slot
-    let slot = -1;
-    for (let i = 1; i <= 8; i++) {
-      if (!cues.some(c => c.id === `cue-${i}`)) {
-        slot = i;
-        break;
+  // DJ Cue button handlers
+  const handleCueMouseDown = () => {
+    const audio = audioRef.current;
+    if (!audio || !currentTrack) return;
+
+    if (isPlaying) {
+      // If playing, CUE pauses and seeks back to cue point
+      audio.pause();
+      audio.currentTime = djCuePoint;
+      seekPlayer(djCuePoint);
+      togglePlayback(); // sets isPlaying = false
+    } else {
+      // If paused, if we are at a new position, tapping sets it
+      const diff = Math.abs(currentTime - djCuePoint);
+      if (diff > 0.08) {
+        setDjCuePoint(currentTime);
+      } else {
+        // Hold to play preview
+        isCuePreviewingRef.current = true;
+        audio.currentTime = djCuePoint;
+        audio.play().catch(() => {});
       }
     }
+  };
 
-    if (slot === -1) {
-      alert(settings.language === 'th' ? 'จุดคิวเต็มแล้ว (สูงสุด 8 จุด)' : 'Cue points limit reached (max 8)');
+  const handleCueMouseUp = () => {
+    const audio = audioRef.current;
+    if (!audio || !currentTrack) return;
+
+    if (isCuePreviewingRef.current) {
+      isCuePreviewingRef.current = false;
+      audio.pause();
+      audio.currentTime = djCuePoint;
+      seekPlayer(djCuePoint);
+    }
+  };
+
+  // Hot Cue Pad click handlers
+  const handleHotCueClick = (slot: number, e: React.MouseEvent) => {
+    e.preventDefault();
+    if (!currentTrack) return;
+
+    const cueId = `cue-${slot}`;
+    const cue = cues.find(c => c.id === cueId);
+
+    if (e.shiftKey) {
+      // Shift + Click to clear/delete
+      if (cue) {
+        const confirmDelete = window.confirm(
+          settings.language === 'th'
+            ? `คุณต้องการลบจุดคิว ${slot} ใช่หรือไม่?`
+            : `Delete Cue ${slot}?`
+        );
+        if (confirmDelete) {
+          setUndoStack(prev => [...prev, cues]);
+          const updatedCues = cues.filter(c => c.id !== cueId);
+          saveCues(currentTrack.id, updatedCues);
+        }
+      }
       return;
     }
 
-    setUndoStack(prev => [...prev, cues]);
+    if (cue) {
+      // Jump and play
+      seekPlayer(cue.time);
+      if (!isPlaying) {
+        togglePlayback();
+      }
+    } else {
+      // Record new cue point at slot
+      setUndoStack(prev => [...prev, cues]);
+      const newCue = {
+        id: cueId,
+        time: currentTime,
+        label: `Cue ${slot}`,
+        color: CUE_COLORS[slot - 1]
+      };
+      saveCues(currentTrack.id, [...cues, newCue]);
+    }
+  };
 
-    const newCue = {
-      id: `cue-${slot}`,
-      time: currentTime,
-      label: `Cue ${slot}`,
-      color: CUE_COLORS[slot - 1]
-    };
+  const handleHotCueContextMenu = (slot: number, e: React.MouseEvent) => {
+    e.preventDefault();
+    const cueId = `cue-${slot}`;
+    const cue = cues.find(c => c.id === cueId);
+    if (cue) {
+      setSelectedCueForEdit(cue);
+      setEditLabel(cue.label);
+      setEditColor(cue.color);
+      setIsEditModalOpen(true);
+    }
+  };
 
-    const updatedCues = [...cues, newCue];
-    saveCues(currentTrack.id, updatedCues);
+  // Looping actions
+  const handleLoopIn = () => {
+    setLoopStart(currentTime);
+    if (loopEnd !== null && loopEnd > currentTime) {
+      setIsLoopActive(true);
+    }
+  };
+
+  const handleLoopOut = () => {
+    if (loopStart !== null && currentTime > loopStart) {
+      setLoopEnd(currentTime);
+      setIsLoopActive(true);
+    } else {
+      setLoopStart(0);
+      setLoopEnd(currentTime);
+      setIsLoopActive(true);
+    }
+  };
+
+  const handleReloopExit = () => {
+    if (isLoopActive) {
+      setIsLoopActive(false);
+    } else if (loopStart !== null && loopEnd !== null) {
+      setIsLoopActive(true);
+      seekPlayer(loopStart);
+    }
+  };
+
+  const handleLoopHalve = () => {
+    if (loopStart !== null && loopEnd !== null) {
+      const len = loopEnd - loopStart;
+      const newEnd = loopStart + (len / 2);
+      setLoopEnd(newEnd);
+    }
+  };
+
+  const handleLoopDouble = () => {
+    if (loopStart !== null && loopEnd !== null) {
+      const len = loopEnd - loopStart;
+      const newEnd = loopStart + (len * 2);
+      const maxDuration = durationSeconds || currentTrack?.duration || 0;
+      setLoopEnd(Math.min(maxDuration, newEnd));
+    }
+  };
+
+  const handleAutoLoop = (beats: number) => {
+    if (!currentTrack) return;
+    const bpm = currentTrack.bpm && currentTrack.bpm > 0 ? currentTrack.bpm : 120;
+    const beatDuration = 60 / bpm;
+    const duration = beatDuration * beats;
+    const start = currentTime;
+    const end = Math.min(durationSeconds || currentTrack.duration, start + duration);
+    setLoopStart(start);
+    setLoopEnd(end);
+    setIsLoopActive(true);
+    seekPlayer(start);
+  };
+
+  // Tempo/Nudge actions
+  const handleNudgeStart = (direction: number) => {
+    setIsNudging(direction * 0.03); // Temp speed adjustment of 3%
+  };
+
+  const handleNudgeEnd = () => {
+    setIsNudging(0);
+  };
+
+  const handleResetTempo = () => {
+    setPitchOffset(0);
   };
 
   // Save Cue Modal Changes
@@ -645,150 +898,280 @@ export default function MiniPlayer() {
         <div ref={timelineContainerRef} id="timeline" />
       </div>
 
-      {/* Tier 2: Track Control Panel */}
-      <div className="track-control-panel">
+      {/* Tier 2: DJ Deck Interface */}
+      <div className="dj-deck-container">
         
-        {/* Left Controls */}
-        <div className="control-panel-left">
-          <div className="playback-controls">
-            <button id="playerPrevBtn" onClick={playPrev} title={t('previous') || 'Previous'}>
-              <SkipBack size={18} fill="currentColor" />
-            </button>
-            <button className="round-play" id="playerPlayBtn" onClick={togglePlayback} title={isPlaying ? 'Pause' : 'Play'}>
-              {isPlaying ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" style={{ marginLeft: '2px' }} />}
-            </button>
-            <button id="playerNextBtn" onClick={playNext} title={t('next') || 'Next'}>
-              <SkipForward size={18} fill="currentColor" />
-            </button>
+        {/* Left Section: Deck Control (PLAY/PAUSE, CUE, SYNC) */}
+        <div className="dj-deck-left">
+          <button 
+            className={`dj-big-btn dj-cue-btn ${!isPlaying && Math.abs(currentTime - djCuePoint) <= 0.08 ? 'cue-active' : ''}`}
+            onMouseDown={handleCueMouseDown}
+            onMouseUp={handleCueMouseUp}
+            onMouseLeave={handleCueMouseUp}
+            onTouchStart={handleCueMouseDown}
+            onTouchEnd={handleCueMouseUp}
+            title={settings.language === 'th' ? 'กดคิวชั่วคราว (Hold ค้างเพื่อพรีวิว)' : 'DJ Cue (Hold to preview)'}
+          >
+            CUE
+          </button>
+          
+          <button 
+            className={`dj-big-btn dj-play-btn ${isPlaying ? 'play-active' : ''}`}
+            onClick={togglePlayback}
+            title={isPlaying ? 'Pause' : 'Play'}
+          >
+            {isPlaying ? 'PAUSE' : 'PLAY'}
+          </button>
+
+          <button 
+            className="dj-sync-btn"
+            onClick={handleResetTempo}
+            title={settings.language === 'th' ? 'รีเซ็ตความเร็วกลับสู่ค่าเริ่มต้น' : 'Reset Tempo to Original'}
+          >
+            SYNC
+          </button>
+        </div>
+
+        {/* Center Section: Track Info, Hot Cues Grid, Loop Control Row */}
+        <div className="dj-deck-center">
+          
+          {/* Top metadata & timing */}
+          <div className="dj-track-meta-row">
+            <div className="player-track-info">
+              <b className="track-title" title={currentTrack.title}>{currentTrack.title}</b>
+              <span className="track-artist" title={currentTrack.artist}>{currentTrack.artist || 'Unknown Artist'}</span>
+            </div>
+            
+            <div className="dj-stats-row">
+              <div className="stat-item">
+                <span className="stat-label">Key</span>
+                <span className="stat-value" style={{ color: keyColors[currentTrack.camelot_key] || '#fff' }}>
+                  {displayKey(currentTrack.camelot_key)}
+                </span>
+              </div>
+              <div className="stat-item">
+                <span className="stat-label">Energy</span>
+                <span className="stat-value" style={{ color: 'var(--accent-purple)' }}>
+                  {currentTrack.energy || 5}
+                </span>
+              </div>
+              <div className="stat-item">
+                <span className="stat-label">BPM</span>
+                <span className="stat-value">
+                  {((currentTrack.bpm || 120) * (1 + (pitchOffset / 100))).toFixed(1)}
+                  <span style={{ fontSize: '9px', color: 'var(--text-muted)', marginLeft: '4px' }}>
+                    ({currentTrack.bpm})
+                  </span>
+                </span>
+              </div>
+            </div>
+
+            <div className="time-display-large">
+              <span className="time-current">{formatTime(currentTime)}</span>
+              <span className="time-divider">/</span>
+              <span className="time-total">{formatTime(durationSeconds || currentTrack.duration)}</span>
+            </div>
           </div>
 
-          <div className="metadata-stats">
-            <div className="stat-item" style={{ minWidth: '40px' }}>
-              <span className="stat-label">Key</span>
-              <span className="stat-value" style={{ color: keyColors[currentTrack.camelot_key] || '#fff' }}>
-                {displayKey(currentTrack.camelot_key)}
-              </span>
-            </div>
-            <div className="stat-item" style={{ minWidth: '40px' }}>
-              <span className="stat-label">Energy</span>
-              <span className="stat-value" style={{ color: 'var(--accent-purple)' }}>
-                {currentTrack.energy || 5}
-              </span>
-            </div>
-            <div className="stat-item" style={{ minWidth: '45px' }}>
-              <span className="stat-label">BPM</span>
-              <span className="stat-value">{currentTrack.bpm}</span>
+          {/* Hot Cue Pads Grid (8 pads) */}
+          <div className="hot-cue-section">
+            <span className="section-title">Hot Cues</span>
+            <div className="hot-cue-grid">
+              {Array.from({ length: 8 }).map((_, idx) => {
+                const slot = idx + 1;
+                const cueId = `cue-${slot}`;
+                const cue = cues.find(c => c.id === cueId);
+                const color = CUE_COLORS[idx];
+                
+                return (
+                  <button
+                    key={cueId}
+                    className={`hot-cue-pad ${cue ? 'has-cue' : 'empty'}`}
+                    style={{
+                      borderColor: color,
+                      boxShadow: cue ? `0 0 8px ${color}50` : 'none',
+                      backgroundColor: cue ? `${color}30` : 'transparent',
+                      color: cue ? '#fff' : `${color}aa`
+                    }}
+                    onClick={(e) => handleHotCueClick(slot, e)}
+                    onContextMenu={(e) => handleHotCueContextMenu(slot, e)}
+                    title={
+                      cue
+                        ? `${cue.label} (${formatTime(cue.time)}) - Click: Jump & Play, Shift+Click: Clear, Right-click: Edit`
+                        : `Empty Slot ${slot} - Click to set Cue at current position`
+                    }
+                  >
+                    <span className="pad-number" style={{ backgroundColor: color }}>{slot}</span>
+                    <span className="pad-label">{cue ? cue.label : 'EMPTY'}</span>
+                    <span className="pad-time">{cue ? formatTime(cue.time) : '--:--'}</span>
+                  </button>
+                );
+              })}
             </div>
           </div>
 
-          <div className="player-track-info">
-            <b className="track-title" title={currentTrack.title}>{currentTrack.title}</b>
-            <span className="track-artist" title={currentTrack.artist}>{currentTrack.artist || 'Unknown Artist'}</span>
-          </div>
-
-          <div className="time-display">
-            {formatTime(currentTime)} / {formatTime(durationSeconds || currentTrack.duration)}
+          {/* Loop Row controls */}
+          <div className="loop-section">
+            <div className="loop-controls-wrapper">
+              <span className="section-title">Loop Controls</span>
+              
+              <div className="loop-row">
+                <button 
+                  className={`btn-loop ${loopStart !== null && loopEnd === null ? 'active' : ''}`}
+                  onClick={handleLoopIn}
+                  title="Loop In (Set Start)"
+                >
+                  Loop In
+                </button>
+                <button 
+                  className={`btn-loop ${isLoopActive ? 'active' : ''}`}
+                  onClick={handleLoopOut}
+                  title="Loop Out (Set End & Start Loop)"
+                >
+                  Loop Out
+                </button>
+                <button 
+                  className={`btn-loop ${isLoopActive ? 'active-reloop' : ''}`}
+                  onClick={handleReloopExit}
+                  disabled={loopStart === null || loopEnd === null}
+                  title="Exit / Reloop"
+                >
+                  Exit / Reloop
+                </button>
+                
+                <div className="loop-divider" />
+                
+                <button className="btn-loop btn-loop-math" onClick={handleLoopHalve} disabled={!isLoopActive} title="Half Loop Size (1/2x)">
+                  1/2x
+                </button>
+                <button className="btn-loop btn-loop-math" onClick={handleLoopDouble} disabled={!isLoopActive} title="Double Loop Size (2x)">
+                  2x
+                </button>
+                
+                <div className="loop-divider" />
+                
+                {/* Auto Loop Beat sizes */}
+                {[0.5, 1, 2, 4, 8, 16].map((beats) => {
+                  const label = beats === 0.5 ? '1/2' : String(beats);
+                  return (
+                    <button
+                      key={`autoloop-${beats}`}
+                      className="btn-loop btn-autoloop"
+                      onClick={() => handleAutoLoop(beats)}
+                      title={`Auto Loop ${beats} Beat(s)`}
+                    >
+                      {label}B
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
           </div>
         </div>
 
-        {/* Right Controls */}
-        <div className="control-panel-right">
-          
-          {/* Zoom Controls */}
-          <button 
-            className="btn-control btn-icon-only" 
-            onClick={() => setZoom(prev => Math.max(0, prev - 10))}
-            disabled={zoom <= 0}
-            title="Zoom Out"
-          >
-            <ZoomOut size={16} />
-          </button>
-          <button 
-            className="btn-control btn-icon-only" 
-            onClick={() => setZoom(prev => (prev === 0 ? 10 : prev + 10))}
-            disabled={zoom >= 150}
-            title="Zoom In"
-          >
-            <ZoomIn size={16} />
-          </button>
-
-          {/* Beat Grid Editor */}
-          <div className="grid-editor-group" style={{ display: 'flex', alignItems: 'center', gap: '3px', border: '1px solid var(--panel-border)', borderRadius: 'var(--border-radius-md)', padding: '2px 4px', background: 'rgba(255, 255, 255, 0.02)' }}>
-            <span style={{ fontSize: '9.5px', color: 'var(--text-muted)', fontWeight: 'bold', padding: '0 4px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Grid</span>
+        {/* Right Section: Pitch & Tempo Control (Vertical Tempo Fader, Nudge, Key Lock) */}
+        <div className="dj-deck-right">
+          <div className="pitch-info">
+            <span className="pitch-percent">
+              {pitchOffset >= 0 ? '+' : ''}{pitchOffset.toFixed(2)}%
+            </span>
             <button 
-              className="btn-control"
-              onClick={() => handleShiftGrid(-0.01)}
-              title="Shift Grid Left (-10ms)"
-              style={{ padding: '2px 5px', fontSize: '10px', height: '22px' }}
+              className={`key-lock-btn ${keyLock ? 'active' : ''}`}
+              onClick={() => setKeyLock(!keyLock)}
+              title="Key Lock / Master Tempo"
             >
-              ◀
-            </button>
-            <button 
-              className="btn-control"
-              onClick={handleSetFirstBeat}
-              title="Set Current Position as First Beat (Downbeat)"
-              style={{ padding: '2px 6px', fontSize: '10px', height: '22px', fontWeight: 'bold' }}
-            >
-              Set 1st
-            </button>
-            <button 
-              className="btn-control"
-              onClick={() => handleShiftGrid(0.01)}
-              title="Shift Grid Right (+10ms)"
-              style={{ padding: '2px 5px', fontSize: '10px', height: '22px' }}
-            >
-              ▶
+              🔑 KEY LOCK
             </button>
           </div>
 
-          {/* Add Cue Button */}
-          <button 
-            className="btn-control"
-            onClick={handleAddCue}
-            title="Add Cue Point (Shift + 1-8)"
-          >
-            <Flag size={16} />
-            + Cue
-          </button>
-
-          {/* Loop Track */}
-          <button 
-            className={`btn-control btn-icon-only ${loop ? 'active' : ''}`}
-            onClick={toggleLoop} 
-            title="Loop Track"
-          >
-            ↻
-          </button>
-
-          {/* Undo Button */}
-          <button 
-            className="btn-control btn-icon-only"
-            onClick={handleUndo}
-            disabled={undoStack.length === 0}
-            title="Undo Last Action"
-          >
-            <Undo size={16} />
-          </button>
-
-          {/* Volume Control */}
-          <div className="volume-control">
+          <div className="pitch-fader-container">
             <button 
-              className="btn-control btn-icon-only" 
-              onClick={handleMuteToggle}
-              title={isMuted ? 'Unmute' : 'Mute'}
-              style={{ border: 'none', background: 'transparent' }}
+              className="nudge-btn nudge-minus"
+              onMouseDown={() => handleNudgeStart(-1)}
+              onMouseUp={handleNudgeEnd}
+              onMouseLeave={handleNudgeEnd}
+              onTouchStart={() => handleNudgeStart(-1)}
+              onTouchEnd={handleNudgeEnd}
+              title="Nudge Tempo Down (-)"
             >
-              {isMuted || volume === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}
+              -
             </button>
-            <input 
-              type="range" 
-              min="0" 
-              max="1" 
-              step="0.01" 
-              value={isMuted ? 0 : volume} 
-              onChange={handleVolumeChange} 
-              className="volume-slider"
-            />
+            
+            <div className="vertical-slider-wrapper">
+              <input 
+                type="range"
+                min="-10"
+                max="10"
+                step="0.05"
+                value={pitchOffset}
+                onChange={(e) => setPitchOffset(parseFloat(e.target.value))}
+                onDoubleClick={handleResetTempo}
+                className="vertical-pitch-slider"
+                title="Tempo Slider (Double-click to reset)"
+              />
+            </div>
+            
+            <button 
+              className="nudge-btn nudge-plus"
+              onMouseDown={() => handleNudgeStart(1)}
+              onMouseUp={handleNudgeEnd}
+              onMouseLeave={handleNudgeEnd}
+              onTouchStart={() => handleNudgeStart(1)}
+              onTouchEnd={handleNudgeEnd}
+              title="Nudge Tempo Up (+)"
+            >
+              +
+            </button>
+          </div>
+
+          <div className="deck-right-bottom">
+            {/* Zoom / Beat Grid / Volume Panel in compact styling */}
+            <div className="compact-controls-grid">
+              
+              {/* Zoom row */}
+              <div className="control-row">
+                <span className="compact-label">Zoom</span>
+                <button className="compact-btn" onClick={() => setZoom(prev => Math.max(0, prev - 10))} disabled={zoom <= 0}>-</button>
+                <button className="compact-btn" onClick={() => setZoom(prev => (prev === 0 ? 10 : prev + 10))} disabled={zoom >= 150}>+</button>
+              </div>
+
+              {/* Grid shift row */}
+              <div className="control-row">
+                <span className="compact-label">Grid</span>
+                <button className="compact-btn" onClick={() => handleShiftGrid(-0.01)}>◀</button>
+                <button className="compact-btn" onClick={handleSetFirstBeat} style={{ fontSize: '9px', fontWeight: 'bold' }}>Set 1st</button>
+                <button className="compact-btn" onClick={() => handleShiftGrid(0.01)}>▶</button>
+              </div>
+
+              {/* Volume & Loop row */}
+              <div className="control-row-volume">
+                <button 
+                  className="compact-icon-btn" 
+                  onClick={handleMuteToggle}
+                  title={isMuted ? 'Unmute' : 'Mute'}
+                >
+                  {isMuted || volume === 0 ? <VolumeX size={13} /> : <Volume2 size={13} />}
+                </button>
+                <input 
+                  type="range" 
+                  min="0" 
+                  max="1" 
+                  step="0.01" 
+                  value={isMuted ? 0 : volume} 
+                  onChange={handleVolumeChange} 
+                  className="compact-volume-slider"
+                />
+                <button 
+                  className="compact-icon-btn"
+                  onClick={handleUndo}
+                  disabled={undoStack.length === 0}
+                  title="Undo Last Action"
+                >
+                  <Undo size={13} />
+                </button>
+              </div>
+
+            </div>
           </div>
         </div>
 
