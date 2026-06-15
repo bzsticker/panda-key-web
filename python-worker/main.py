@@ -30,9 +30,9 @@ API_SECRET = os.getenv("API_SECRET", "pandakey_super_secret_token_123!")
 
 # Note Names & Key Profile Definitions
 NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
-# Sha'ath Key Profiles (specifically optimized for Electronic & Pop music)
-MAJOR_PROFILE = np.array([7.239, 3.504, 3.584, 2.845, 5.819, 4.559, 2.448, 6.995, 3.391, 4.556, 4.074, 4.459])
-MINOR_PROFILE = np.array([7.151, 2.524, 3.548, 7.200, 3.391, 3.840, 2.502, 7.027, 3.493, 3.012, 2.428, 3.473])
+# Krumhansl-Schmuckler (K-S) key profiles
+MAJOR_PROFILE = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88])
+MINOR_PROFILE = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17])
 
 CAMELOT_MAJOR = {
     'C': '8B', 'C#': '3B', 'Db': '3B', 'D': '10B', 'D#': '5B', 'Eb': '5B', 'E': '12B', 'F': '7B',
@@ -42,6 +42,54 @@ CAMELOT_MINOR = {
     'C': '5A', 'C#': '12A', 'Db': '12A', 'D': '7A', 'D#': '2A', 'Eb': '2A', 'E': '9A', 'F': '4A',
     'F#': '11A', 'Gb': '11A', 'G': '6A', 'G#': '1A', 'Ab': '1A', 'A': '8A', 'A#': '3A', 'Bb': '3A', 'B': '10A'
 }
+
+CAMELOT_TO_MUSICAL = {
+    '1A': 'Abm', '2A': 'Ebm', '3A': 'Bbm', '4A': 'Fm', '5A': 'Cm', '6A': 'Gm', '7A': 'Dm', '8A': 'Am', '9A': 'Em', '10A': 'Bm', '11A': 'F#m', '12A': 'Dbm',
+    '1B': 'B', '2B': 'F#', '3B': 'Db', '4B': 'Ab', '5B': 'Eb', '6B': 'Bb', '7B': 'F', '8B': 'C', '9B': 'G', '10B': 'D', '11B': 'A', '12B': 'E'
+}
+MUSICAL_TO_CAMELOT = {v: k for k, v in CAMELOT_TO_MUSICAL.items()}
+MUSICAL_ALIASES = {
+    'A#m': 'Bbm', 'C#m': 'Dbm', 'D#m': 'Ebm', 'F#m': 'F#m', 'G#m': 'Abm',
+    'A#': 'Bb', 'C#': 'Db', 'D#': 'Eb', 'F#': 'F#', 'G#': 'Ab',
+    'Gb': 'F#', 'Db': 'Db', 'Ab': 'Ab', 'Eb': 'Eb', 'Bb': 'Bb'
+}
+OPEN_KEY_TO_CAMELOT = {
+    '1d': '12B', '2d': '1B', '3d': '2B', '4d': '3B', '5d': '4B', '6d': '5B', '7d': '6B', '8d': '7B', '9d': '8B', '10d': '9B', '11d': '10B', '12d': '11B',
+    '1m': '12A', '2m': '1A', '3m': '2A', '4m': '3A', '5m': '4A', '6m': '5A', '7m': '6A', '8m': '7A', '9m': '8A', '10m': '9A', '11m': '10A', '12m': '11A'
+}
+
+def normalize_tag_key(tag_key: str):
+    if not tag_key:
+        return None, None
+    tag_key = tag_key.strip()
+    if re.match(r'^\d{1,2}[AB]$', tag_key):
+        cam = tag_key
+        mus = CAMELOT_TO_MUSICAL.get(cam)
+        return mus, cam
+    if re.match(r'^\d{1,2}[md]$', tag_key):
+        cam = OPEN_KEY_TO_CAMELOT.get(tag_key)
+        if cam:
+            mus = CAMELOT_TO_MUSICAL.get(cam)
+            return mus, cam
+    mus_clean = tag_key
+    is_minor = False
+    if mus_clean.endswith('min') or mus_clean.endswith('minor'):
+        is_minor = True
+        mus_clean = mus_clean.replace('min', '').replace('minor', '').strip()
+    elif mus_clean.endswith('m') and len(mus_clean) > 1:
+        is_minor = True
+        mus_clean = mus_clean[:-1].strip()
+    mus_clean = MUSICAL_ALIASES.get(mus_clean, mus_clean)
+    mus_normalized = mus_clean + ("m" if is_minor else "")
+    cam = MUSICAL_TO_CAMELOT.get(mus_normalized)
+    if cam:
+        return mus_normalized, cam
+    alias_normalized = MUSICAL_ALIASES.get(mus_normalized)
+    if alias_normalized:
+        cam = MUSICAL_TO_CAMELOT.get(alias_normalized)
+        if cam:
+            return alias_normalized, cam
+    return None, None
 
 class AnalysisRequest(BaseModel):
     track_id: str
@@ -160,32 +208,42 @@ def extract_cover_art(file_path):
 
 
 def estimate_precise_bpm(y, sr):
-    # Downsample to 22050 Hz to speed up beat/tempo analysis by 2x and reduce memory usage
+    # Downsample to 22050 Hz for speed
     target_sr = 22050
     y_down = librosa.resample(y, orig_sr=sr, target_sr=target_sr)
     
-    # hop_length=128 at 22050 Hz has the exact same temporal resolution as hop_length=256 at 44100 Hz
-    hop_length = 128
+    # Use hop_length=64 for very high resolution (2.9ms per frame)
+    hop_length = 64
     
-    # 1. Get rough tempo using librosa's robust estimator
-    rough_tempos = librosa.feature.tempo(y=y_down, sr=target_sr, hop_length=hop_length, start_bpm=120)
+    # Compute onset strength on raw downsampled audio
+    onset_env = librosa.onset.onset_strength(y=y_down, sr=target_sr, hop_length=hop_length)
+    
+    # Estimate rough tempo using librosa's standard tempo function
+    rough_tempos = librosa.feature.tempo(onset_envelope=onset_env, sr=target_sr, hop_length=hop_length, start_bpm=120)
     rough_tempo = float(rough_tempos[0] if isinstance(rough_tempos, (np.ndarray, list)) else rough_tempos)
     
-    # 2. Compute onset envelope of percussive component to focus on beat transients
-    y_percussive = librosa.effects.percussive(y_down)
-    onset_env = librosa.onset.onset_strength(y=y_percussive, sr=target_sr, hop_length=hop_length)
+    if rough_tempo <= 0.0:
+        return 120.0
+        
+    # Standard DJ range 90-180
+    while rough_tempo < 90.0:
+        rough_tempo *= 2.0
+    while rough_tempo > 180.0:
+        rough_tempo /= 2.0
+        
+    # Autocorrelation to find precise peak
+    min_lag = int(round(60.0 * target_sr / (hop_length * 220.0)))
+    max_lag = int(round(60.0 * target_sr / (hop_length * 40.0)))
     
-    # 3. Compute autocorrelation
-    max_lag = int(np.ceil(60.0 * target_sr / (hop_length * 40.0)))
     ac = librosa.autocorrelate(onset_env, max_size=max_lag)
     
-    # 4. Find the lag corresponding to the rough tempo
+    # Find rough lag index
     rough_lag = 60.0 * target_sr / (hop_length * rough_tempo)
-    
-    # 5. Search for the local peak in the autocorrelation around rough_lag (+/- 4 lags)
     rough_lag_idx = int(round(rough_lag))
-    search_min = max(1, rough_lag_idx - 4)
-    search_max = min(len(ac) - 2, rough_lag_idx + 4)
+    
+    # Search for peak in a window around rough_lag (+/- 15 lags for high-res hop_length=64)
+    search_min = max(min_lag, rough_lag_idx - 15)
+    search_max = min(len(ac) - 2, rough_lag_idx + 15)
     
     if search_min >= search_max:
         return rough_tempo
@@ -194,12 +252,11 @@ def estimate_precise_bpm(y, sr):
     local_peak_relative = np.argmax(local_slice)
     peak_idx = search_min + local_peak_relative
     
-    # 6. Perform parabolic interpolation on the local peak
+    # Parabolic interpolation
     if 0 < peak_idx < len(ac) - 1:
         alpha = ac[peak_idx - 1]
         beta = ac[peak_idx]
         gamma = ac[peak_idx + 1]
-        
         denom = alpha - 2 * beta + gamma
         if abs(denom) > 1e-5:
             p = 0.5 * (alpha - gamma) / denom
@@ -210,19 +267,11 @@ def estimate_precise_bpm(y, sr):
     else:
         interpolated_lag = peak_idx
         
-    # 7. Compute precise BPM from the interpolated fractional lag
     precise_bpm = 60.0 * target_sr / (hop_length * interpolated_lag)
     
-    # Sanity check: if the precise BPM is way off from rough_tempo, fallback to rough_tempo
+    # Sanity check: if too far from rough_tempo, fallback to rough_tempo
     if abs(precise_bpm - rough_tempo) > 10.0:
         precise_bpm = rough_tempo
-        
-    # Snap to nearest integer if within 1.2 BPM (helps correct 129.1 -> 130 etc. for DJ tracks)
-    nearest_integer_bpm = round(precise_bpm)
-    if abs(precise_bpm - nearest_integer_bpm) < 1.2:
-        precise_bpm = float(nearest_integer_bpm)
-    elif abs(precise_bpm - round(rough_tempo)) < 1.2:
-        precise_bpm = float(round(rough_tempo))
         
     return precise_bpm
 
@@ -236,7 +285,8 @@ def estimate_key(y, sr):
     y_harmonic = librosa.effects.harmonic(y_down)
     
     # Chroma energy computation with higher frequency resolution (36 bins/octave mapped to 12 chroma)
-    chroma = librosa.feature.chroma_cqt(y=y_harmonic, sr=target_sr, bins_per_octave=36)
+    # Explicitly set tuning=0.0 to prevent librosa from attempting automatic tuning estimation
+    chroma = librosa.feature.chroma_cqt(y=y_harmonic, sr=target_sr, bins_per_octave=36, tuning=0.0)
     chroma_mean = np.mean(chroma, axis=1)
     
     best_corr = -1
@@ -303,14 +353,48 @@ def run_audio_analysis(req: AnalysisRequest):
             if m:
                 year = int(m.group(0))
 
-        # Step 3: Load audio with librosa for BPM/Key
-        print(f"[Worker] Loading audio file: {temp_file_path}")
-        update_job_status(req.job_id, 50, "กำลังคำนวณค่าจังหวะเพลง (BPM)...")
-        # Load at standard sample rate 44100 for high temporal resolution BPM and CQT key detection
-        y, sr = librosa.load(temp_file_path, sr=44100)
+        # Get duration using mutagen as primary source for faster speed
+        duration = 0.0
+        if audio is not None and hasattr(audio, 'info') and audio.info is not None:
+            duration = getattr(audio.info, 'length', 0.0)
+            print(f"[Worker] Audio duration from mutagen: {duration} seconds")
+
+        # Extract existing metadata tags for BPM and Key if they exist (Rekordbox/Serato/Traktor)
+        tag_bpm_str = get_tag_value(audio, ['TBPM', 'bpm', 'tempo', 'tmpo'])
+        tag_bpm = None
+        if tag_bpm_str:
+            try:
+                m_bpm = re.search(r'\d+(\.\d+)?', tag_bpm_str)
+                if m_bpm:
+                    tag_bpm = float(m_bpm.group(0))
+                    print(f"[Worker] Extracted BPM tag: {tag_bpm}")
+            except Exception:
+                pass
+
+        tag_key_str = get_tag_value(audio, ['TKEY', 'initialkey', 'KEY', 'key', '----:com.apple.iTunes:initialkey'])
+        tag_mus_key, tag_cam_key = None, None
+        if tag_key_str:
+            tag_mus_key, tag_cam_key = normalize_tag_key(tag_key_str)
+            if tag_cam_key:
+                print(f"[Worker] Extracted Key tag: {tag_mus_key} ({tag_cam_key})")
+
+        # Step 3: Load audio with librosa (middle 60-second segment at 22050 Hz)
+        print(f"[Worker] Loading audio file (middle 60s at 22050 Hz): {temp_file_path}")
+        update_job_status(req.job_id, 50, "กำลังโหลดและแปลงข้อมูลเสียงเพลง...")
+        
+        sr_target = 22050
+        if duration > 60.0:
+            offset = (duration - 60.0) / 2.0
+            y, sr = librosa.load(temp_file_path, sr=sr_target, offset=offset, duration=60.0)
+        else:
+            y, sr = librosa.load(temp_file_path, sr=sr_target)
+            
         print(f"[Worker] Audio loaded. Sample rate: {sr}, shape: {y.shape}")
-        duration = float(librosa.get_duration(y=y, sr=sr))
-        print(f"[Worker] Audio duration: {duration} seconds")
+        
+        # If duration was not parsed correctly from mutagen, fallback to librosa duration
+        if duration <= 0.0:
+            duration = float(librosa.get_duration(y=y, sr=sr))
+            print(f"[Worker] Fallback duration calculated: {duration} seconds")
 
         # Calculate advanced energy score (1-10) using multiple signal features
         print("[Worker] Calculating advanced energy score components...")
@@ -319,25 +403,44 @@ def run_audio_analysis(req: AnalysisRequest):
         rms = librosa.feature.rms(y=y)
         mean_rms = float(np.mean(rms))
 
-        # 1. Loudness (L)
+        # 1. Loudness (L) - Calibrated for DJ tracks (5-9 distribution)
         loudness_db = 20 * np.log10(mean_rms + 1e-6)
-        L = np.clip((loudness_db - (-26.0)) / (-6.0 - (-26.0)), 0.0, 1.0)
+        L = np.clip((loudness_db - (-20.0)) / (-2.0 - (-20.0)), 0.0, 1.0)
 
-        # 2. Beat Strength (B)
+        # Estimate/Read BPM first
+        bpm = 0
+        if tag_bpm is not None and tag_bpm > 0:
+            bpm = int(round(tag_bpm))
+            print(f"[Worker] Using existing BPM from tag: {bpm}")
+        else:
+            if duration < 3.0 or mean_rms < 0.0001:
+                bpm = 120
+            else:
+                print("[Worker] Estimating BPM...")
+                bpm = int(round(estimate_precise_bpm(y, sr)))
+                print(f"[Worker] Estimated BPM: {bpm}")
+
+        # 2. Beat Strength (B) - Calibrated for DJ tracks (5-9 distribution)
         onset_env = librosa.onset.onset_strength(y=y, sr=sr)
-        tempo_detected, beats = librosa.beat.beat_track(y=y, sr=sr)
+        try:
+            tempo_detected, beats = librosa.beat.beat_track(y=y, sr=sr, start_bpm=bpm)
+        except Exception:
+            beats = []
+            
         if len(beats) > 0:
             beat_strength = float(np.mean(onset_env[beats]))
         else:
             beat_strength = float(np.mean(onset_env))
-        B = np.clip((beat_strength - 0.8) / (4.5 - 0.8), 0.0, 1.0)
+        # Widen the clip range to 7.0 to prevent clustering
+        B = np.clip((beat_strength - 0.8) / (7.0 - 0.8), 0.0, 1.0)
 
-        # 3. Onset Density (O)
+        # 3. Onset Density (O) - Calibrated
         onsets = librosa.onset.onset_detect(onset_envelope=onset_env, sr=sr)
-        onset_rate = len(onsets) / (duration if duration > 0 else 1.0)
-        O = np.clip((onset_rate - 1.0) / (6.5 - 1.0), 0.0, 1.0)
+        segment_duration = len(y) / sr
+        onset_rate = len(onsets) / (segment_duration if segment_duration > 0 else 1.0)
+        O = np.clip((onset_rate - 1.0) / (8.0 - 1.0), 0.0, 1.0)
 
-        # 4. Bass Energy (F)
+        # 4. Bass Energy (F) - Calibrated
         stft = np.abs(librosa.stft(y))
         frequencies = librosa.fft_frequencies(sr=sr)
         bass_bins = frequencies < 150
@@ -345,50 +448,49 @@ def run_audio_analysis(req: AnalysisRequest):
             bass_energy = float(np.mean(stft[bass_bins, :]))
         else:
             bass_energy = 0.0
-        F = np.clip((bass_energy - 0.01) / (0.25 - 0.01), 0.0, 1.0)
+        # Widen bass limit to 1.5 to lower the influence of typical heavy DJ bass
+        F = np.clip((bass_energy - 0.01) / (1.5 - 0.01), 0.0, 1.0)
 
-        # 5. Spectral Brightness (S)
+        # 5. Spectral Brightness (S) - Calibrated
         spectral_centroid = librosa.feature.spectral_centroid(y=y, sr=sr)
         mean_centroid = float(np.mean(spectral_centroid))
-        S = np.clip((mean_centroid - 1000.0) / (3500.0 - 1000.0), 0.0, 1.0)
+        S = np.clip((mean_centroid - 800.0) / (4500.0 - 800.0), 0.0, 1.0)
 
-        # 6. Compression / Dynamic Range (C)
+        # 6. Compression / Dynamic Range (C) - Calibrated
         rms_db = 20 * np.log10(rms + 1e-6)
         rms_std = float(np.std(rms_db))
-        C = 1.0 - np.clip((rms_std - 1.5) / (8.0 - 1.5), 0.0, 1.0)
+        C = 1.0 - np.clip((rms_std - 1.0) / (9.0 - 1.0), 0.0, 1.0)
 
-        bpm = 0
+        # 7. Key estimation fallback
         musical_key = "--"
         camelot_key = "--"
-
-        if duration < 3.0 or mean_rms < 0.0001:
-            print("[Worker] Audio is too short or too silent. Skipping beat/key detection. Fallback to defaults.")
-            bpm = 120
-            musical_key = "C"
-            camelot_key = "8B"
+        if tag_cam_key and tag_mus_key:
+            musical_key = tag_mus_key
+            camelot_key = tag_cam_key
+            print(f"[Worker] Using existing Key from tag: {musical_key} ({camelot_key})")
         else:
-            # Estimate BPM
-            print("[Worker] Estimating BPM...")
-            bpm = int(round(estimate_precise_bpm(y, sr)))
-            print(f"[Worker] Estimated BPM: {bpm}")
+            if duration < 3.0 or mean_rms < 0.0001:
+                musical_key = "C"
+                camelot_key = "8B"
+            else:
+                print("[Worker] Estimating Key...")
+                update_job_status(req.job_id, 70, "กำลังประมวลผลคีย์เพลงและระบบ Camelot...")
+                musical_key, camelot_key = estimate_key(y, sr)
+                print(f"[Worker] Estimated Key: {musical_key} ({camelot_key})")
 
-            # Step 4: Estimate musical key
-            print("[Worker] Estimating Key...")
-            update_job_status(req.job_id, 70, "กำลังประมวลผลคีย์เพลงและระบบ Camelot...")
-            musical_key, camelot_key = estimate_key(y, sr)
-            print(f"[Worker] Estimated Key: {musical_key} ({camelot_key})")
-
-        # 7. Tempo Contribution (T)
+        # 8. Tempo Contribution (T)
         perceived_bpm = bpm
-        if perceived_bpm < 90:
-            perceived_bpm *= 2
-        elif perceived_bpm > 150:
-            perceived_bpm /= 2
+        if perceived_bpm > 0:
+            while perceived_bpm < 90:
+                perceived_bpm *= 2
+            while perceived_bpm > 150:
+                perceived_bpm /= 2
         T = np.clip((perceived_bpm - 90.0) / (150.0 - 90.0), 0.0, 1.0)
 
-        # Synthesize Raw Energy Score (rebalanced weights to favor DJ-essential Loudness, Bass, and Beat features)
-        energy_raw = 0.30 * L + 0.25 * B + 0.25 * F + 0.10 * O + 0.05 * S + 0.05 * T
+        # Rebalanced weights to emphasize loudness variation and downscale bass clipping
+        energy_raw = 0.40 * L + 0.25 * B + 0.15 * F + 0.10 * O + 0.05 * S + 0.05 * T
         energy = int(np.clip(np.round(1.0 + 9.0 * energy_raw), 1.0, 10.0))
+        
         print(f"[Worker] Computed components - L: {L:.2f}, B: {B:.2f}, F: {F:.2f}, O: {O:.2f}, S: {S:.2f}, T: {T:.2f}")
         print(f"[Worker] Calculated Energy Raw: {energy_raw:.3f} -> Final Energy: {energy}")
 
