@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 import librosa
 import numpy as np
 from mutagen import File as MutagenFile
+# pyrefly: ignore [missing-import]
 from mutagen.easyid3 import EasyID3
 from mutagen.mp3 import MP3
 from mutagen.flac import FLAC
