@@ -6,6 +6,7 @@ import { useApp, Track } from '@/context/AppContext';
 import { getTranslation } from '@/lib/translations';
 import { getCompatibleCamelotKeys } from '@/lib/keys';
 import CollectionPlayer from '@/components/CollectionPlayer';
+import { RefreshCcw, UploadCloud } from 'lucide-react';
 
 // Helper to compute deterministic mockup stats for track columns
 function getProfessionalAudioStats(trackId: string) {
@@ -51,7 +52,8 @@ export default function CollectionPage() {
     setSelectedCollectionId,
     updatePlaylistTracks,
     updateCollectionTracks,
-    currentTrack
+    currentTrack,
+    jobs
   } = useApp();
 
   const t = getTranslation(settings.language);
@@ -69,7 +71,7 @@ export default function CollectionPage() {
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editData, setEditData] = useState<Partial<Track>>({});
   const [isDjExportOpen, setIsDjExportOpen] = useState(false);
-  const [djExportFormat, setDjExportFormat] = useState<'rekordbox' | 'traktor'>('rekordbox');
+  const [djExportFormat, setDjExportFormat] = useState<'rekordbox' | 'traktor' | 'm3u'>('rekordbox');
   const [localPathPrefix, setLocalPathPrefix] = useState('C:\\Users\\PXNDA\\Music\\PandaKey\\');
   const [autoRenameEnabled, setAutoRenameEnabled] = useState(false);
   const [renamePattern, setRenamePattern] = useState('[BPM] - [Key] - Artist - Title');
@@ -133,8 +135,58 @@ export default function CollectionPage() {
 
   const [isLoaded, setIsLoaded] = useState(false);
 
+  // Drag and Drop & Progress Drawer States
+  const [isDragging, setIsDragging] = useState(false);
+  const [isDrawerCollapsed, setIsDrawerCollapsed] = useState(false);
+  const dragCounterRef = useRef(0);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const unanalyzedCount = tracks.filter(t => t.analysis_status !== 'completed').length;
+
+  // Web-wide drag and drop listener
+  useEffect(() => {
+    const handleDragEnter = (e: DragEvent) => {
+      e.preventDefault();
+      dragCounterRef.current++;
+      if (e.dataTransfer && e.dataTransfer.types.includes('Files')) {
+        setIsDragging(true);
+      }
+    };
+
+    const handleDragOver = (e: DragEvent) => {
+      e.preventDefault();
+    };
+
+    const handleDragLeave = (e: DragEvent) => {
+      e.preventDefault();
+      dragCounterRef.current--;
+      if (dragCounterRef.current === 0) {
+        setIsDragging(false);
+      }
+    };
+
+    const handleDrop = (e: DragEvent) => {
+      e.preventDefault();
+      dragCounterRef.current = 0;
+      setIsDragging(false);
+
+      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        uploadFiles(e.dataTransfer.files);
+      }
+    };
+
+    window.addEventListener('dragenter', handleDragEnter);
+    window.addEventListener('dragover', handleDragOver);
+    window.addEventListener('dragleave', handleDragLeave);
+    window.addEventListener('drop', handleDrop);
+
+    return () => {
+      window.removeEventListener('dragenter', handleDragEnter);
+      window.removeEventListener('dragover', handleDragOver);
+      window.removeEventListener('dragleave', handleDragLeave);
+      window.removeEventListener('drop', handleDrop);
+    };
+  }, [uploadFiles]);
 
   const handleAddFilesClick = () => {
     fileInputRef.current?.click();
@@ -483,7 +535,11 @@ export default function CollectionPage() {
     
     const link = document.createElement('a');
     link.href = url;
-    link.download = djExportFormat === 'traktor' ? 'pandakey_traktor.nml' : 'pandakey_rekordbox.xml';
+    link.download = djExportFormat === 'traktor' 
+      ? 'pandakey_traktor.nml' 
+      : djExportFormat === 'm3u'
+      ? 'pandakey_playlist.m3u8'
+      : 'pandakey_rekordbox.xml';
     link.click();
     
     setIsDjExportOpen(false);
@@ -2129,9 +2185,9 @@ export default function CollectionPage() {
                 <label className="block text-xs font-semibold uppercase tracking-wider text-muted mb-2">
                   {settings.language === 'th' ? 'เลือกฟอร์แมตโปรแกรมดีเจ:' : 'Select DJ Software Format:'}
                 </label>
-                <div style={{ display: 'flex', gap: '10px' }}>
+                <div style={{ display: 'flex', gap: '8px' }}>
                   <button 
-                    className={`btn flex-1 py-2 px-3 rounded text-sm font-semibold border text-center transition-all ${djExportFormat === 'rekordbox' ? 'active' : ''}`}
+                    className={`btn flex-1 py-1.5 px-2 rounded text-xs font-semibold border text-center transition-all ${djExportFormat === 'rekordbox' ? 'active' : ''}`}
                     onClick={() => setDjExportFormat('rekordbox')}
                     style={{ 
                       borderColor: djExportFormat === 'rekordbox' ? 'var(--accent-cyan)' : 'var(--panel-border)',
@@ -2140,10 +2196,10 @@ export default function CollectionPage() {
                       cursor: 'pointer'
                     }}
                   >
-                    Pioneer Rekordbox (.xml)
+                    Rekordbox (.xml)
                   </button>
                   <button 
-                    className={`btn flex-1 py-2 px-3 rounded text-sm font-semibold border text-center transition-all ${djExportFormat === 'traktor' ? 'active' : ''}`}
+                    className={`btn flex-1 py-1.5 px-2 rounded text-xs font-semibold border text-center transition-all ${djExportFormat === 'traktor' ? 'active' : ''}`}
                     onClick={() => setDjExportFormat('traktor')}
                     style={{ 
                       borderColor: djExportFormat === 'traktor' ? 'var(--accent-purple)' : 'var(--panel-border)',
@@ -2152,7 +2208,19 @@ export default function CollectionPage() {
                       cursor: 'pointer'
                     }}
                   >
-                    Native Instruments Traktor (.nml)
+                    Traktor (.nml)
+                  </button>
+                  <button 
+                    className={`btn flex-1 py-1.5 px-2 rounded text-xs font-semibold border text-center transition-all ${djExportFormat === 'm3u' ? 'active' : ''}`}
+                    onClick={() => setDjExportFormat('m3u')}
+                    style={{ 
+                      borderColor: djExportFormat === 'm3u' ? 'var(--accent-yellow)' : 'var(--panel-border)',
+                      backgroundColor: djExportFormat === 'm3u' ? 'rgba(255, 211, 0, 0.1)' : 'transparent',
+                      color: djExportFormat === 'm3u' ? 'var(--accent-yellow)' : 'var(--text-main)',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    M3U Playlist (.m3u8)
                   </button>
                 </div>
               </div>
@@ -2199,10 +2267,19 @@ export default function CollectionPage() {
               </button>
               <button 
                 className="btn py-1.5 px-4 rounded text-sm cursor-pointer text-white" 
-                style={{ backgroundColor: djExportFormat === 'traktor' ? 'var(--accent-purple)' : 'var(--accent-cyan)' }}
+                style={{ 
+                  backgroundColor: djExportFormat === 'traktor' 
+                    ? 'var(--accent-purple)' 
+                    : djExportFormat === 'm3u' 
+                    ? 'var(--accent-yellow)' 
+                    : 'var(--accent-cyan)',
+                  color: djExportFormat === 'm3u' ? '#000' : '#fff'
+                }}
                 onClick={handleDjExport}
               >
-                {settings.language === 'th' ? 'ดาวน์โหลดไฟล์ดาต้าเบส' : 'Download DJ Database'}
+                {settings.language === 'th' 
+                  ? (djExportFormat === 'm3u' ? 'ดาวน์โหลด M3U Playlist' : 'ดาวน์โหลดไฟล์ดาต้าเบส') 
+                  : (djExportFormat === 'm3u' ? 'Download M3U Playlist' : 'Download DJ Database')}
               </button>
             </div>
           </div>
@@ -2220,6 +2297,74 @@ export default function CollectionPage() {
       </div>
 
       <CollectionPlayer />
+
+      {/* Glassmorphism Drag and Drop Overlay */}
+      <div className={`drag-drop-overlay ${isDragging ? 'active' : ''}`}>
+        <div className="drag-drop-box">
+          <UploadCloud size={48} className="text-cyan-400 drag-drop-icon" />
+          <div className="drag-drop-title">
+            {settings.language === 'th' ? 'ลากและวางเพื่ออัปโหลดเพลง' : 'Drag & Drop to Upload Tracks'}
+          </div>
+          <div className="drag-drop-text">
+            {settings.language === 'th' 
+              ? 'รองรับไฟล์เสียงหลายไฟล์พร้อมกัน (.mp3, .wav, .flac, .m4a)' 
+              : 'Supports multiple audio files at once (.mp3, .wav, .flac, .m4a)'}
+          </div>
+        </div>
+      </div>
+
+      {/* Progress Drawer for Audio Uploads & Analysis */}
+      {jobs.length > 0 && (
+        <div className={`progress-drawer ${isDrawerCollapsed ? 'collapsed' : ''}`}>
+          <div 
+            className="progress-drawer-header" 
+            onClick={() => setIsDrawerCollapsed(!isDrawerCollapsed)}
+          >
+            <div className="progress-drawer-title">
+              <RefreshCcw size={12} className={jobs.some(j => j.status === 'pending' || j.status === 'running') ? 'animate-spin' : ''} />
+              <span>
+                {settings.language === 'th' 
+                  ? `คิวงานวิเคราะห์ (${jobs.filter(j => j.status === 'pending' || j.status === 'running').length})` 
+                  : `Analysis Queue (${jobs.filter(j => j.status === 'pending' || j.status === 'running').length})`}
+              </span>
+            </div>
+            <span className="progress-drawer-toggle">
+              {isDrawerCollapsed ? '▲' : '▼'}
+            </span>
+          </div>
+          {!isDrawerCollapsed && (
+            <div className="progress-drawer-body">
+              {jobs.map(job => (
+                <div key={job.id} className="progress-job-item">
+                  <div className="progress-job-meta">
+                    <span className="progress-job-name" title={job.file_name}>{job.file_name}</span>
+                    <span className="progress-job-percent">{job.progress}%</span>
+                  </div>
+                  <div className="progress-job-bar-bg">
+                    <div 
+                      className="progress-job-bar-fill" 
+                      style={{ width: `${job.progress}%` }} 
+                    />
+                  </div>
+                  <div className="progress-job-step">
+                    {job.status === 'failed' ? (
+                      <span className="text-red-400 font-semibold" style={{ color: '#ff5074' }}>
+                        {job.error_message || (settings.language === 'th' ? 'ผิดพลาด' : 'Failed')}
+                      </span>
+                    ) : job.status === 'completed' ? (
+                      <span className="text-green-400 font-semibold" style={{ color: '#3ce57c' }}>
+                        {settings.language === 'th' ? 'วิเคราะห์สำเร็จ' : 'Analysis Complete'}
+                      </span>
+                    ) : (
+                      job.current_step
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </section>
   );
 }

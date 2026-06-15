@@ -143,6 +143,27 @@ ${entryTags}
           'Cache-Control': 'no-cache'
         }
       });
+    } else if (format === 'm3u') {
+      const separator = localPathPrefix.includes('\\') ? '\\' : '/';
+      const cleanPrefix = localPathPrefix.endsWith(separator) ? localPathPrefix : localPathPrefix + separator;
+
+      const m3uEntries = tracks.map((t) => {
+        const duration = Math.round(t.duration || 0);
+        const displayName = `${t.artist || 'Unknown Artist'} - ${t.title}`;
+        const filePath = cleanPrefix + t.file_name;
+        return `#EXTINF:${duration},${displayName}\n${filePath}`;
+      }).join('\n');
+
+      const m3uContent = `#EXTM3U\n${m3uEntries}`.trim();
+
+      return new Response(m3uContent, {
+        status: 200,
+        headers: {
+          'Content-Type': 'audio/x-mpegurl; charset=utf-8',
+          'Content-Disposition': 'attachment; filename="pandakey_playlist.m3u8"',
+          'Cache-Control': 'no-cache'
+        }
+      });
     } else {
       // Default: Pioneer Rekordbox XML
       const normPrefix = localPathPrefix.replace(/\\/g, '/').replace(/\/+/g, '/');

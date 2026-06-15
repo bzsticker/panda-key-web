@@ -98,6 +98,10 @@ export default function CollectionPlayer() {
   const [zoomWindow, setZoomWindow] = useState<number>(12); // default zoom window (seconds)
   const [isQuantized, setIsQuantized] = useState<boolean>(true); // default true for DJ feel
 
+  // Pitch & Key Lock (Master Tempo) States
+  const [pitch, setPitch] = useState<number>(0);
+  const [isKeyLock, setIsKeyLock] = useState<boolean>(true);
+
   // Quantize Snapping Helper
   const getNearestBeatTime = (time: number): number => {
     if (!currentTrack || !currentTrack.bpm) return time;
@@ -427,6 +431,21 @@ export default function CollectionPlayer() {
       }
     };
   }, []);
+
+  // Sync pitch and key lock to HTML5 audio element
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    // Calculate playback rate (e.g. +2% pitch -> playbackRate = 1.02)
+    const rate = 1 + pitch / 100;
+    audio.playbackRate = rate;
+
+    // Apply master tempo key lock
+    if ('preservesPitch' in audio) {
+      audio.preservesPitch = isKeyLock;
+    }
+  }, [pitch, isKeyLock, currentTrack, isPlaying]);
 
   // Sync refs to avoid restarting the useEffect animation loop and causing stutter
   let initialGridOffset = 0;
@@ -1093,6 +1112,7 @@ export default function CollectionPlayer() {
   }
 
   const keyColor = keyColors[currentTrack.camelot_key] || '#fff';
+  const displayBpm = currentTrack.bpm ? (currentTrack.bpm * (1 + pitch / 100)).toFixed(1) : '--';
 
   return (
     <div className="collection-player panel col-player-deck">
@@ -1111,7 +1131,7 @@ export default function CollectionPlayer() {
             <span className="col-player-artist" title={currentTrack.artist}>{currentTrack.artist || 'Unknown Artist'}</span>
             <div className="col-player-badge-row">
               <span className="col-badge-key" style={{ color: keyColor }}>{currentTrack.camelot_key}</span>
-              <span className="col-badge-bpm">{currentTrack.bpm} BPM</span>
+              <span className="col-badge-bpm">{displayBpm} BPM</span>
             </div>
           </div>
         </div>
@@ -1297,6 +1317,39 @@ export default function CollectionPlayer() {
           <button onClick={() => handleShiftGrid(-0.01)} className="col-btn-grid-val" title="Shift Grid Left (-10ms)">◀</button>
           <button onClick={handleSetFirstBeat} className="col-btn-grid-val font-bold" style={{ fontSize: '9px' }} title="Set First Beat (Downbeat)">SET 1st</button>
           <button onClick={() => handleShiftGrid(0.01)} className="col-btn-grid-val" title="Shift Grid Right (+10ms)">▶</button>
+        </div>
+
+        {/* Pitch / Speed Controls */}
+        <div className="col-dj-pitch-group">
+          <button 
+            onClick={() => setIsKeyLock(!isKeyLock)} 
+            className={`col-btn-dj col-btn-keylock ${isKeyLock ? 'active' : ''}`}
+            title="Master Tempo (Key Lock)"
+            style={{ fontSize: '9px', fontWeight: 'bold', minWidth: '32px' }}
+          >
+            {isKeyLock ? 'LOCK' : 'PITCH'}
+          </button>
+          <div className="col-pitch-slider-container">
+            <input 
+              type="range"
+              min="-8"
+              max="8"
+              step="0.1"
+              value={pitch}
+              onChange={(e) => setPitch(parseFloat(e.target.value))}
+              className="col-pitch-slider"
+              title="Pitch Control"
+            />
+            <span className="col-pitch-value">{(pitch >= 0 ? '+' : '') + pitch.toFixed(1)}%</span>
+          </div>
+          <button 
+            onClick={() => setPitch(0)}
+            className="col-btn-dj col-btn-pitch-reset"
+            title="Reset Pitch to 0%"
+            style={{ fontSize: '9px', fontWeight: 'bold' }}
+          >
+            RST
+          </button>
         </div>
       </div>
 

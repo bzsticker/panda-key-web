@@ -403,9 +403,9 @@ def run_audio_analysis(req: AnalysisRequest):
         rms = librosa.feature.rms(y=y)
         mean_rms = float(np.mean(rms))
 
-        # 1. Loudness (L) - Calibrated for DJ tracks (5-9 distribution)
+        # 1. Loudness (L) - Wide scale (-26 dB to -4 dB)
         loudness_db = 20 * np.log10(mean_rms + 1e-6)
-        L = np.clip((loudness_db - (-20.0)) / (-2.0 - (-20.0)), 0.0, 1.0)
+        L = np.clip((loudness_db - (-26.0)) / (-4.0 - (-26.0)), 0.0, 1.0)
 
         # Estimate/Read BPM first
         bpm = 0
@@ -420,7 +420,7 @@ def run_audio_analysis(req: AnalysisRequest):
                 bpm = int(round(estimate_precise_bpm(y, sr)))
                 print(f"[Worker] Estimated BPM: {bpm}")
 
-        # 2. Beat Strength (B) - Calibrated for DJ tracks (5-9 distribution)
+        # 2. Beat Strength (B) - Wide scale (0.5 to 8.0)
         onset_env = librosa.onset.onset_strength(y=y, sr=sr)
         try:
             tempo_detected, beats = librosa.beat.beat_track(y=y, sr=sr, start_bpm=bpm)
@@ -431,16 +431,15 @@ def run_audio_analysis(req: AnalysisRequest):
             beat_strength = float(np.mean(onset_env[beats]))
         else:
             beat_strength = float(np.mean(onset_env))
-        # Widen the clip range to 7.0 to prevent clustering
-        B = np.clip((beat_strength - 0.8) / (7.0 - 0.8), 0.0, 1.0)
+        B = np.clip((beat_strength - 0.5) / (8.0 - 0.5), 0.0, 1.0)
 
-        # 3. Onset Density (O) - Calibrated
+        # 3. Onset Density (O) - Wide scale (0.5 to 6.5)
         onsets = librosa.onset.onset_detect(onset_envelope=onset_env, sr=sr)
         segment_duration = len(y) / sr
         onset_rate = len(onsets) / (segment_duration if segment_duration > 0 else 1.0)
-        O = np.clip((onset_rate - 1.0) / (8.0 - 1.0), 0.0, 1.0)
+        O = np.clip((onset_rate - 0.5) / (6.5 - 0.5), 0.0, 1.0)
 
-        # 4. Bass Energy (F) - Calibrated
+        # 4. Bass Energy (F) - Wide scale (0.5 to 50.0)
         stft = np.abs(librosa.stft(y))
         frequencies = librosa.fft_frequencies(sr=sr)
         bass_bins = frequencies < 150
@@ -448,8 +447,7 @@ def run_audio_analysis(req: AnalysisRequest):
             bass_energy = float(np.mean(stft[bass_bins, :]))
         else:
             bass_energy = 0.0
-        # Widen bass limit to 1.5 to lower the influence of typical heavy DJ bass
-        F = np.clip((bass_energy - 0.01) / (1.5 - 0.01), 0.0, 1.0)
+        F = np.clip((bass_energy - 0.5) / (50.0 - 0.5), 0.0, 1.0)
 
         # 5. Spectral Brightness (S) - Calibrated
         spectral_centroid = librosa.feature.spectral_centroid(y=y, sr=sr)
@@ -487,12 +485,15 @@ def run_audio_analysis(req: AnalysisRequest):
                 perceived_bpm /= 2
         T = np.clip((perceived_bpm - 90.0) / (150.0 - 90.0), 0.0, 1.0)
 
-        # Rebalanced weights to emphasize loudness variation and downscale bass clipping
-        energy_raw = 0.40 * L + 0.25 * B + 0.15 * F + 0.10 * O + 0.05 * S + 0.05 * T
-        energy = int(np.clip(np.round(1.0 + 9.0 * energy_raw), 1.0, 10.0))
+        # Weights: L: 35%, B: 30%, F: 15%, O: 10%, S: 5%, T: 5%
+        energy_raw = 0.35 * L + 0.30 * B + 0.15 * F + 0.10 * O + 0.05 * S + 0.05 * T
+        
+        # Apply Stretching (min_raw=0.25, max_raw=0.80) to produce beautifully distributed values (1-10)
+        energy_raw_stretched = np.clip((energy_raw - 0.25) / (0.80 - 0.25), 0.0, 1.0)
+        energy = int(np.clip(np.round(1.0 + 9.0 * energy_raw_stretched), 1.0, 10.0))
         
         print(f"[Worker] Computed components - L: {L:.2f}, B: {B:.2f}, F: {F:.2f}, O: {O:.2f}, S: {S:.2f}, T: {T:.2f}")
-        print(f"[Worker] Calculated Energy Raw: {energy_raw:.3f} -> Final Energy: {energy}")
+        print(f"[Worker] Calculated Stretched Energy: {energy_raw_stretched:.3f} (Raw: {energy_raw:.3f}) -> Final Energy: {energy}")
 
         # Step 6: Update track details in D1
         update_job_status(req.job_id, 95, "บันทึกผลการวิเคราะห์ลงฐานข้อมูล...")
