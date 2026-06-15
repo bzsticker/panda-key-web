@@ -29,6 +29,9 @@ const CUE_COLORS = [
 // Global cache to store analyzed waveforms
 const waveformCache = new Map<string, Array<{ amplitude: number; r: number; g: number; b: number }>>();
 
+// Global cache to store decoded audio buffers for reverse playback
+const audioBufferCache = new Map<string, AudioBuffer>();
+
 // Helper to format seconds to MM:SS:CC (minutes:seconds:centiseconds) for pro DJ feel
 function formatProTime(secs: number): string {
   if (isNaN(secs) || !isFinite(secs) || secs < 0) return '00:00.00';
@@ -42,6 +45,7 @@ export default function CollectionPlayer() {
   const {
     currentTrack,
     isPlaying,
+    setIsPlaying,
     currentTime,
     durationSeconds,
     togglePlayback,
@@ -54,7 +58,8 @@ export default function CollectionPlayer() {
     settings,
     cues,
     saveCues,
-    fetchLibrary
+    fetchLibrary,
+    updateTrackMetadata
   } = useApp();
 
   const zoomedCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -65,6 +70,7 @@ export default function CollectionPlayer() {
   // Drag-to-seek Refs
   const isDraggingOverviewRef = useRef(false);
   const isDraggingZoomedRef = useRef(false);
+  const wasPlayingBeforeDragRef = useRef(false);
   const dragStartClientXRef = useRef(0);
   const dragStartAudioTimeRef = useRef(0);
   const seekFromMouseEventRef = useRef<(clientX: number) => void>(() => {});
@@ -88,6 +94,38 @@ export default function CollectionPlayer() {
   const [fluxStartAudioTime, setFluxStartAudioTime] = useState<number>(0);
   const [isReverseActive, setIsReverseActive] = useState(false);
 
+  // Quantize & Waveform Zoom States
+  const [zoomWindow, setZoomWindow] = useState<number>(12); // default zoom window (seconds)
+  const [isQuantized, setIsQuantized] = useState<boolean>(true); // default true for DJ feel
+
+  // Quantize Snapping Helper
+  const getNearestBeatTime = (time: number): number => {
+    if (!currentTrack || !currentTrack.bpm) return time;
+    const bpm = currentTrack.bpm;
+    const beatSecs = 60 / bpm;
+    
+    // Retrieve grid offset from comments (e.g. [grid_offset=0.250])
+    let gridOffset = 0;
+    if (currentTrack.comments) {
+      const match = currentTrack.comments.match(/\[grid_offset=(-?\d+(?:\.\d+)?)\]/);
+      if (match) {
+        gridOffset = parseFloat(match[1]);
+      }
+    }
+    
+    const n = Math.round((time - gridOffset) / beatSecs);
+    const target = gridOffset + n * beatSecs;
+    const maxDur = durationSeconds || currentTrack.duration || 180;
+    return Math.max(0, Math.min(maxDur, target));
+  };
+
+  // Web Audio Reverse Playback Refs
+  const decodedAudioBufferRef = useRef<AudioBuffer | null>(null);
+  const reverseSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const reverseGainRef = useRef<GainNode | null>(null);
+  const reverseCtxRef = useRef<AudioContext | null>(null);
+  const reverseAnimRef = useRef<number | null>(null);
+
   const [isMuted, setIsMuted] = useState(false);
   const [prevVolume, setPrevVolume] = useState(0.8);
 
@@ -99,6 +137,7 @@ export default function CollectionPlayer() {
       setLoopStart(null);
       setLoopEnd(null);
       setIsLoopActive(false);
+      decodedAudioBufferRef.current = null;
       return;
     }
 
@@ -108,8 +147,9 @@ export default function CollectionPlayer() {
     setLoopEnd(null);
     setIsLoopActive(false);
 
-    if (waveformCache.has(currentTrack.id)) {
+    if (waveformCache.has(currentTrack.id) && audioBufferCache.has(currentTrack.id)) {
       setWaveform(waveformCache.get(currentTrack.id) || null);
+      decodedAudioBufferRef.current = audioBufferCache.get(currentTrack.id) || null;
       return;
     }
 
@@ -125,6 +165,9 @@ export default function CollectionPlayer() {
         const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
         const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
         if (!active) return;
+
+        audioBufferCache.set(currentTrack.id, audioBuffer);
+        decodedAudioBufferRef.current = audioBuffer;
 
         const numPoints = 4000;
         const channelData = audioBuffer.getChannelData(0); // Left channel
@@ -266,24 +309,124 @@ export default function CollectionPlayer() {
     return () => clearInterval(checkInterval);
   }, [isPlaying, isLoopActive, loopStart, loopEnd, isFluxActive, inFluxState, audioRef]);
 
-  // 3. Simulated Reverse Playback
+  // 3. Web Audio API Reverse Playback
   useEffect(() => {
-    if (!isReverseActive || !isPlaying || !audioRef.current) return;
-
     const audio = audioRef.current;
-    
-    const revInterval = setInterval(() => {
-      if (audio.currentTime > 0.08) {
-        audio.currentTime -= 0.16; // 0.08s forward in 80ms, so skip back 0.16s for -1.0x reverse
-      } else {
-        audio.currentTime = 0;
-        setIsReverseActive(false);
-        audio.pause();
-      }
-    }, 80);
+    if (!audio) return;
 
-    return () => clearInterval(revInterval);
-  }, [isReverseActive, isPlaying, audioRef]);
+    if (isReverseActive && isPlaying) {
+      const buffer = decodedAudioBufferRef.current;
+      if (!buffer) {
+        // Fallback: If not decoded yet, use simulated seek back
+        const fallbackInterval = setInterval(() => {
+          if (audio.currentTime > 0.08) {
+            audio.currentTime -= 0.16;
+          } else {
+            audio.currentTime = 0;
+            setIsReverseActive(false);
+            audio.pause();
+          }
+        }, 80);
+        return () => clearInterval(fallbackInterval);
+      }
+
+      // We have the buffer! Play it in reverse using Web Audio API
+      let ctx = reverseCtxRef.current;
+      if (!ctx) {
+        ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        reverseCtxRef.current = ctx;
+      }
+
+      if (ctx.state === 'suspended') {
+        ctx.resume();
+      }
+
+      // Pause HTML5 audio element
+      audio.pause();
+
+      // Create nodes
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.playbackRate.value = -1; // Play backwards
+
+      const gainNode = ctx.createGain();
+      gainNode.gain.value = volume;
+      reverseGainRef.current = gainNode;
+
+      source.connect(gainNode);
+      gainNode.connect(ctx.destination);
+      reverseSourceRef.current = source;
+
+      // Start playback from current position
+      const startTime = audio.currentTime;
+      source.start(0, startTime);
+
+      const startRealTime = performance.now();
+
+      const updatePlayhead = () => {
+        const elapsed = (performance.now() - startRealTime) / 1000;
+        const currentPos = startTime - elapsed;
+
+        if (currentPos > 0) {
+          audio.currentTime = currentPos;
+          seekPlayer(currentPos);
+          reverseAnimRef.current = requestAnimationFrame(updatePlayhead);
+        } else {
+          audio.currentTime = 0;
+          seekPlayer(0);
+          setIsReverseActive(false);
+          setIsPlaying(false);
+        }
+      };
+
+      reverseAnimRef.current = requestAnimationFrame(updatePlayhead);
+    } else {
+      // Clean up reverse nodes if we stop reversing or pause
+      if (reverseSourceRef.current) {
+        try {
+          reverseSourceRef.current.stop();
+        } catch (e) {}
+        reverseSourceRef.current = null;
+      }
+      if (reverseAnimRef.current) {
+        cancelAnimationFrame(reverseAnimRef.current);
+        reverseAnimRef.current = null;
+      }
+
+      // If we stopped reversing but are still supposed to be playing, resume HTML5 audio
+      if (isPlaying && !isReverseActive) {
+        audio.play().catch(err => console.error("Error resuming audio after reverse:", err));
+      }
+    }
+
+    return () => {
+      if (reverseSourceRef.current) {
+        try {
+          reverseSourceRef.current.stop();
+        } catch (e) {}
+      }
+      if (reverseAnimRef.current) {
+        cancelAnimationFrame(reverseAnimRef.current);
+      }
+    };
+  }, [isReverseActive, isPlaying, seekPlayer, setIsPlaying]);
+
+  // Sync reverse gain with player volume
+  useEffect(() => {
+    if (reverseGainRef.current) {
+      reverseGainRef.current.gain.value = volume;
+    }
+  }, [volume]);
+
+  // Clean up Web Audio Context on unmount
+  useEffect(() => {
+    return () => {
+      if (reverseCtxRef.current) {
+        reverseCtxRef.current.close().catch(err => console.error("Error closing reverse AudioContext:", err));
+        reverseCtxRef.current = null;
+      }
+    };
+  }, []);
 
   // Sync refs to avoid restarting the useEffect animation loop and causing stutter
   let initialGridOffset = 0;
@@ -306,7 +449,8 @@ export default function CollectionPlayer() {
     currentTime,
     durationSeconds: durationSeconds || currentTrack?.duration || 180,
     bpm: currentTrack?.bpm || 0,
-    gridOffset: initialGridOffset
+    gridOffset: initialGridOffset,
+    zoomWindow
   });
 
   useEffect(() => {
@@ -329,9 +473,10 @@ export default function CollectionPlayer() {
       currentTime,
       durationSeconds: durationSeconds || currentTrack?.duration || 180,
       bpm: currentTrack?.bpm || 0,
-      gridOffset
+      gridOffset,
+      zoomWindow
     };
-  }, [loopStart, loopEnd, isLoopActive, inFluxState, fluxStartRealTime, fluxStartAudioTime, cues, isPlaying, currentTime, durationSeconds, currentTrack]);
+  }, [loopStart, loopEnd, isLoopActive, inFluxState, fluxStartRealTime, fluxStartAudioTime, cues, isPlaying, currentTime, durationSeconds, currentTrack, zoomWindow]);
 
   // 4. Combined Waveform Animation Loop
   useEffect(() => {
@@ -395,8 +540,8 @@ export default function CollectionPlayer() {
       zCtx.fillStyle = '#060a0f';
       zCtx.fillRect(0, 0, zw, zh);
 
-      // Render scrolling waveform: Zoom window is ±6 seconds (12s total)
-      const zoomWindow = 12; 
+      // Render scrolling waveform
+      const zoomWindow = params.zoomWindow || 12; 
       const startT = cur - zoomWindow / 2;
       
       const barSpacing = 1.5;
@@ -588,6 +733,10 @@ export default function CollectionPlayer() {
   const handleOverviewMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     e.preventDefault();
     isDraggingOverviewRef.current = true;
+    wasPlayingBeforeDragRef.current = isPlaying;
+    if (isPlaying) {
+      setIsPlaying(false);
+    }
     seekFromMouseEventRef.current(e.clientX);
   };
 
@@ -597,6 +746,10 @@ export default function CollectionPlayer() {
     dragStartClientXRef.current = e.clientX;
     const activeTime = audioRef.current ? audioRef.current.currentTime : currentTime;
     dragStartAudioTimeRef.current = activeTime;
+    wasPlayingBeforeDragRef.current = isPlaying;
+    if (isPlaying) {
+      setIsPlaying(false);
+    }
   };
 
   const handleZoomedTouchStart = (e: React.TouchEvent<HTMLCanvasElement>) => {
@@ -605,6 +758,10 @@ export default function CollectionPlayer() {
     dragStartClientXRef.current = e.touches[0].clientX;
     const activeTime = audioRef.current ? audioRef.current.currentTime : currentTime;
     dragStartAudioTimeRef.current = activeTime;
+    wasPlayingBeforeDragRef.current = isPlaying;
+    if (isPlaying) {
+      setIsPlaying(false);
+    }
   };
 
   // Beat Grid Editor functions
@@ -623,14 +780,7 @@ export default function CollectionPlayer() {
     const newComments = `${baseComments} [grid_offset=${newOffset.toFixed(3)}]`.trim();
     
     try {
-      const res = await fetch(`/api/tracks/${currentTrack.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ comments: newComments })
-      });
-      if (res.ok) {
-        fetchLibrary();
-      }
+      await updateTrackMetadata(currentTrack.id, { comments: newComments });
     } catch (err) {
       console.error('Failed to shift beat grid:', err);
     }
@@ -647,14 +797,7 @@ export default function CollectionPlayer() {
     const newComments = `${baseComments} [grid_offset=${newOffset.toFixed(3)}]`.trim();
     
     try {
-      const res = await fetch(`/api/tracks/${currentTrack.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ comments: newComments })
-      });
-      if (res.ok) {
-        fetchLibrary();
-      }
+      await updateTrackMetadata(currentTrack.id, { comments: newComments });
     } catch (err) {
       console.error('Failed to set first beat downbeat:', err);
     }
@@ -682,8 +825,6 @@ export default function CollectionPlayer() {
           const zw = rect.width || canvas.width || 800;
           const dx = e.clientX - dragStartClientXRef.current;
           
-          // zoomWindow is 12 seconds
-          const zoomWindow = 12;
           const dt = - (dx / zw) * zoomWindow;
           const dur = durationSeconds || currentTrack?.duration || 180;
           const targetTime = Math.max(0, Math.min(dur, dragStartAudioTimeRef.current + dt));
@@ -708,7 +849,6 @@ export default function CollectionPlayer() {
           const zw = rect.width || canvas.width || 800;
           const dx = clientX - dragStartClientXRef.current;
           
-          const zoomWindow = 12;
           const dt = - (dx / zw) * zoomWindow;
           const dur = durationSeconds || currentTrack?.duration || 180;
           const targetTime = Math.max(0, Math.min(dur, dragStartAudioTimeRef.current + dt));
@@ -722,8 +862,13 @@ export default function CollectionPlayer() {
     };
 
     const handleWindowMouseUp = () => {
+      const wasDragging = isDraggingOverviewRef.current || isDraggingZoomedRef.current;
       isDraggingOverviewRef.current = false;
       isDraggingZoomedRef.current = false;
+      if (wasDragging && wasPlayingBeforeDragRef.current) {
+        setIsPlaying(true);
+        wasPlayingBeforeDragRef.current = false;
+      }
     };
 
     window.addEventListener('mousemove', handleWindowMouseMove);
@@ -739,7 +884,7 @@ export default function CollectionPlayer() {
       window.removeEventListener('touchmove', handleWindowTouchMove);
       window.removeEventListener('touchend', handleWindowMouseUp);
     };
-  }, [durationSeconds, currentTrack]);
+  }, [durationSeconds, currentTrack, setIsPlaying, zoomWindow]);
 
   // Pioneer DJ CUE Button logic
   const handleCueMouseDown = () => {
@@ -777,7 +922,8 @@ export default function CollectionPlayer() {
     } else {
       // Set new cue point at current playhead
       const activeTime = audioRef.current ? audioRef.current.currentTime : currentTime;
-      setDjCuePoint(activeTime);
+      const targetTime = isQuantized ? getNearestBeatTime(activeTime) : activeTime;
+      setDjCuePoint(targetTime);
     }
   };
 
@@ -808,20 +954,31 @@ export default function CollectionPlayer() {
 
   // Reverse playback toggle
   const handleReverseToggle = () => {
+    if (isDecoding) {
+      const msg = settings.language === 'th'
+        ? 'กำลังวิเคราะห์สเปกตรัมเพลงสำหรับเล่นย้อนกลับ กรุณารอสักครู่...'
+        : 'Analyzing audio spectrum for reverse playback. Please wait...';
+      window.dispatchEvent(new CustomEvent('pandakey:toast', {
+        detail: { message: msg, type: 'info' }
+      }));
+      return;
+    }
     setIsReverseActive(!isReverseActive);
   };
 
   // Manual Loop In / Out / Exit
   const handleLoopIn = () => {
     const activeTime = audioRef.current ? audioRef.current.currentTime : currentTime;
-    setLoopStart(activeTime);
+    const start = isQuantized ? getNearestBeatTime(activeTime) : activeTime;
+    setLoopStart(start);
     setIsLoopActive(false);
   };
 
   const handleLoopOut = () => {
     const activeTime = audioRef.current ? audioRef.current.currentTime : currentTime;
-    if (loopStart !== null && activeTime > loopStart) {
-      setLoopEnd(activeTime);
+    const end = isQuantized ? getNearestBeatTime(activeTime) : activeTime;
+    if (loopStart !== null && end > loopStart) {
+      setLoopEnd(end);
       setIsLoopActive(true);
     }
   };
@@ -850,8 +1007,9 @@ export default function CollectionPlayer() {
     const loopDuration = beats * beatSecs;
 
     const activeTime = audioRef.current ? audioRef.current.currentTime : currentTime;
-    setLoopStart(activeTime);
-    setLoopEnd(activeTime + loopDuration);
+    const start = isQuantized ? getNearestBeatTime(activeTime) : activeTime;
+    setLoopStart(start);
+    setLoopEnd(start + loopDuration);
     setIsLoopActive(true);
   };
 
@@ -878,6 +1036,7 @@ export default function CollectionPlayer() {
         if (isFluxActive && !inFluxState && isPlaying) {
           // Initialize flux state
           setInFluxState(true);
+          // eslint-disable-next-line react-hooks/purity
           setFluxStartRealTime(Date.now());
           const activeTime = audioRef.current ? audioRef.current.currentTime : currentTime;
           setFluxStartAudioTime(activeTime);
@@ -890,14 +1049,15 @@ export default function CollectionPlayer() {
       } else {
         // Save new hotcue
         const activeTime = audioRef.current ? audioRef.current.currentTime : currentTime;
+        const targetTime = isQuantized ? getNearestBeatTime(activeTime) : activeTime;
         const newCue = {
           id: cueId,
-          time: activeTime,
+          time: targetTime,
           label: `Cue ${slot}`,
           color: CUE_COLORS[slot - 1]
         };
         saveCues(currentTrack.id, [...cues, newCue]);
-        setDjCuePoint(activeTime);
+        setDjCuePoint(targetTime);
       }
     }
   };
@@ -990,7 +1150,7 @@ export default function CollectionPlayer() {
           </div>
         )}
         {/* A. Zoomed scrolling Waveform */}
-        <div className="col-zoomed-wrapper">
+        <div className="col-zoomed-wrapper" style={{ position: 'relative' }}>
           <canvas 
             ref={zoomedCanvasRef} 
             className="col-zoomed-canvas" 
@@ -998,6 +1158,38 @@ export default function CollectionPlayer() {
             onTouchStart={handleZoomedTouchStart}
             style={{ cursor: 'grab' }}
           />
+          {/* Zoom Controls Overlay */}
+          <div className="col-zoom-widget">
+            <button 
+              onClick={() => {
+                const zoomLevels = [4, 8, 12, 16, 24, 32];
+                const currentIndex = zoomLevels.indexOf(zoomWindow);
+                if (currentIndex > 0) {
+                  setZoomWindow(zoomLevels[currentIndex - 1]);
+                }
+              }}
+              className="col-zoom-btn"
+              title="Zoom In"
+              disabled={zoomWindow === 4}
+            >
+              ＋
+            </button>
+            <span className="col-zoom-label">{zoomWindow}s</span>
+            <button 
+              onClick={() => {
+                const zoomLevels = [4, 8, 12, 16, 24, 32];
+                const currentIndex = zoomLevels.indexOf(zoomWindow);
+                if (currentIndex < zoomLevels.length - 1) {
+                  setZoomWindow(zoomLevels[currentIndex + 1]);
+                }
+              }}
+              className="col-zoom-btn"
+              title="Zoom Out"
+              disabled={zoomWindow === 32}
+            >
+              －
+            </button>
+          </div>
         </div>
         {/* B. Overview Waveform */}
         <div className="col-overview-wrapper">
@@ -1041,6 +1233,14 @@ export default function CollectionPlayer() {
           </button>
 
           <button 
+            onClick={() => setIsQuantized(!isQuantized)}
+            className={`col-btn-dj col-btn-quantize ${isQuantized ? 'active' : ''}`}
+            title="Quantize (Snap to Beat Grid)"
+          >
+            Q
+          </button>
+
+          <button 
             onClick={handleFluxToggle}
             className={`col-btn-dj col-btn-flux ${isFluxActive ? 'active' : ''}`}
             title="Flux Mode (Slip)"
@@ -1051,10 +1251,18 @@ export default function CollectionPlayer() {
 
           <button 
             onClick={handleReverseToggle}
-            className={`col-btn-dj col-btn-rev ${isReverseActive ? 'active' : ''}`}
-            title="Reverse Play"
+            className={`col-btn-dj col-btn-rev ${isReverseActive ? 'active' : ''} ${isDecoding ? 'loading-rev' : ''}`}
+            title={isDecoding 
+              ? (settings.language === 'th' ? 'กำลังถอดรหัส...' : 'Decoding...') 
+              : 'Reverse Play'}
+            style={isDecoding ? { cursor: 'not-allowed', opacity: 0.6 } : {}}
           >
-            REV
+            {isDecoding ? (
+              <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <RefreshCcw size={10} className="animate-spin text-pink-400" />
+                REV
+              </span>
+            ) : 'REV'}
           </button>
         </div>
 

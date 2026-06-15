@@ -3697,3 +3697,89 @@ mark {
   color: var(--text-main);
 }
 
+/* ==========================================================================
+   19. EXTRA MUSIC PLAYER IMPROVEMENTS (Quantize, Zoom Widget, REV Loading)
+   ========================================================================== */
+.col-btn-quantize {
+  color: var(--accent-red) !important;
+  border-color: rgba(255, 80, 116, 0.2) !important;
+}
+
+.col-btn-quantize:hover {
+  background: rgba(255, 80, 116, 0.08) !important;
+  border-color: rgba(255, 80, 116, 0.4) !important;
+  color: #ff5074 !important;
+}
+
+.col-btn-quantize.active {
+  background: var(--accent-red) !important;
+  border-color: var(--accent-red) !important;
+  color: var(--text-dark) !important;
+  box-shadow: 0 0 10px rgba(255, 80, 116, 0.6) !important;
+}
+
+/* Zoom Widget Overlay */
+.col-zoom-widget {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(8, 14, 24, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  padding: 3px 6px;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 15;
+}
+
+.col-zoom-btn {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text-main);
+  font-size: 11px;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.col-zoom-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: var(--accent-cyan);
+  color: var(--accent-cyan);
+}
+
+.col-zoom-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.col-zoom-label {
+  font-family: monospace;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+  padding: 0 4px;
+  min-width: 24px;
+  text-align: center;
+  user-select: none;
+}
+
+/* REV Loading Spinner Support */
+.loading-rev {
+  padding: 0 8px !important;
+}
+
+.loading-rev svg {
+  animation: spin 1.2s linear infinite;
+}
+
+

@@ -115,6 +115,7 @@ interface AppContextType {
   volume: number;
   setVolume: (val: number) => void;
   audioRef: React.RefObject<HTMLAudioElement | null>;
+  setIsPlaying: React.Dispatch<React.SetStateAction<boolean>>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -867,6 +868,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         cues,
         volume,
         audioRef,
+        setIsPlaying,
         
         setActivePage,
         setActiveFilter,

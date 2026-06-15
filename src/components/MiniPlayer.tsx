@@ -64,7 +64,8 @@ export default function MiniPlayer() {
     setVolume,
     audioRef,
     settings,
-    fetchLibrary
+    fetchLibrary,
+    updateTrackMetadata
   } = useApp();
 
   const t = getTranslation(settings.language);
@@ -812,14 +813,7 @@ export default function MiniPlayer() {
     const newComments = `${baseComments} [grid_offset=${newOffset.toFixed(3)}]`.trim();
     
     try {
-      const res = await fetch(`/api/tracks/${currentTrack.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ comments: newComments })
-      });
-      if (res.ok) {
-        fetchLibrary();
-      }
+      await updateTrackMetadata(currentTrack.id, { comments: newComments });
     } catch (err) {
       console.error('Failed to shift beat grid:', err);
     }
@@ -835,14 +829,7 @@ export default function MiniPlayer() {
     const newComments = `${baseComments} [grid_offset=${newOffset.toFixed(3)}]`.trim();
     
     try {
-      const res = await fetch(`/api/tracks/${currentTrack.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ comments: newComments })
-      });
-      if (res.ok) {
-        fetchLibrary();
-      }
+      await updateTrackMetadata(currentTrack.id, { comments: newComments });
     } catch (err) {
       console.error('Failed to set first beat downbeat:', err);
     }

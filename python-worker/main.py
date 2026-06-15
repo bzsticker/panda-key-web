@@ -214,21 +214,28 @@ def estimate_precise_bpm(y, sr):
     
     # Sanity check: if the precise BPM is way off from rough_tempo, fallback to rough_tempo
     if abs(precise_bpm - rough_tempo) > 10.0:
-        return rough_tempo
+        precise_bpm = rough_tempo
+        
+    # Snap to nearest integer if within 1.2 BPM (helps correct 129.1 -> 130 etc. for DJ tracks)
+    nearest_integer_bpm = round(precise_bpm)
+    if abs(precise_bpm - nearest_integer_bpm) < 1.2:
+        precise_bpm = float(nearest_integer_bpm)
+    elif abs(precise_bpm - round(rough_tempo)) < 1.2:
+        precise_bpm = float(round(rough_tempo))
         
     return precise_bpm
 
 
 def estimate_key(y, sr):
-    # Downsample to 11025 Hz for extremely fast and low-memory key analysis (Nyquist 5512.5 Hz is perfect for musical keys)
-    target_sr = 11025
+    # Downsample to 22050 Hz to keep mid-to-high frequency harmonics (perfect for key analysis)
+    target_sr = 22050
     y_down = librosa.resample(y, orig_sr=sr, target_sr=target_sr)
     
     # Separate harmonic component to remove percussion noise for more accurate key detection
     y_harmonic = librosa.effects.harmonic(y_down)
     
-    # Chroma energy computation on harmonic component
-    chroma = librosa.feature.chroma_cqt(y=y_harmonic, sr=target_sr)
+    # Chroma energy computation with higher frequency resolution (36 bins/octave mapped to 12 chroma)
+    chroma = librosa.feature.chroma_cqt(y=y_harmonic, sr=target_sr, bins_per_octave=36)
     chroma_mean = np.mean(chroma, axis=1)
     
     best_corr = -1
@@ -378,10 +385,10 @@ def run_audio_analysis(req: AnalysisRequest):
             perceived_bpm /= 2
         T = np.clip((perceived_bpm - 90.0) / (150.0 - 90.0), 0.0, 1.0)
 
-        # Synthesize Raw Energy Score
-        energy_raw = 0.25 * L + 0.20 * B + 0.15 * O + 0.15 * F + 0.10 * S + 0.10 * C + 0.05 * T
+        # Synthesize Raw Energy Score (rebalanced weights to favor DJ-essential Loudness, Bass, and Beat features)
+        energy_raw = 0.30 * L + 0.25 * B + 0.25 * F + 0.10 * O + 0.05 * S + 0.05 * T
         energy = int(np.clip(np.round(1.0 + 9.0 * energy_raw), 1.0, 10.0))
-        print(f"[Worker] Computed components - L: {L:.2f}, B: {B:.2f}, O: {O:.2f}, F: {F:.2f}, S: {S:.2f}, C: {C:.2f}, T: {T:.2f}")
+        print(f"[Worker] Computed components - L: {L:.2f}, B: {B:.2f}, F: {F:.2f}, O: {O:.2f}, S: {S:.2f}, T: {T:.2f}")
         print(f"[Worker] Calculated Energy Raw: {energy_raw:.3f} -> Final Energy: {energy}")
 
         # Step 6: Update track details in D1
