@@ -2315,7 +2315,10 @@ export default function CollectionPage() {
 
       {/* Progress Drawer for Audio Uploads & Analysis */}
       {jobs.length > 0 && (
-        <div className={`progress-drawer ${isDrawerCollapsed ? 'collapsed' : ''}`}>
+        <div 
+          className={`progress-drawer ${isDrawerCollapsed ? 'collapsed' : ''}`}
+          style={{ bottom: currentTrack ? '304px' : '104px' }}
+        >
           <div 
             className="progress-drawer-header" 
             onClick={() => setIsDrawerCollapsed(!isDrawerCollapsed)}

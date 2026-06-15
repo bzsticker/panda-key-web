@@ -910,6 +910,7 @@ h1, h2, h3, h4, h5, h6 {
   margin-bottom: 4px;
   display: -webkit-box;
   -webkit-line-clamp: 1;
+  line-clamp: 1;
   -webkit-box-orient: vertical;
   overflow: hidden;
   width: 100%;
@@ -921,6 +922,7 @@ h1, h2, h3, h4, h5, h6 {
   margin-bottom: 8px;
   display: -webkit-box;
   -webkit-line-clamp: 1;
+  line-clamp: 1;
   -webkit-box-orient: vertical;
   overflow: hidden;
   width: 100%;
@@ -3925,7 +3927,7 @@ mark {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+  transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1), bottom 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
   transform: translateY(0);
 }
 
