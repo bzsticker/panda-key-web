@@ -2,8 +2,8 @@
 'use client';
 
 import React, { useRef, useEffect, useState } from 'react';
-import { useApp, Track } from '@/context/AppContext';
-import { Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Zap, RefreshCcw } from 'lucide-react';
+import { useApp } from '@/context/AppContext';
+import { Play, Pause, Volume2, VolumeX, Zap, RefreshCcw } from 'lucide-react';
 
 // Predefined colors for key matching
 const keyColors: Record<string, string> = {
@@ -49,8 +49,6 @@ export default function CollectionPlayer() {
     currentTime,
     durationSeconds,
     togglePlayback,
-    playNext,
-    playPrev,
     seekPlayer,
     volume,
     setVolume,
@@ -58,13 +56,11 @@ export default function CollectionPlayer() {
     settings,
     cues,
     saveCues,
-    fetchLibrary,
     updateTrackMetadata
   } = useApp();
 
   const zoomedCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const overviewCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const animationRef = useRef<number | null>(null);
   const timeActiveRef = useRef<HTMLSpanElement | null>(null);
 
   // Drag-to-seek Refs
@@ -136,23 +132,29 @@ export default function CollectionPlayer() {
   // 1. Asynchronous Audio Decoding & 3-Band Analysis
   useEffect(() => {
     if (!currentTrack) {
-      setWaveform(null);
-      setDjCuePoint(0);
-      setLoopStart(null);
-      setLoopEnd(null);
-      setIsLoopActive(false);
+      Promise.resolve().then(() => {
+        setWaveform(null);
+        setDjCuePoint(0);
+        setLoopStart(null);
+        setLoopEnd(null);
+        setIsLoopActive(false);
+      });
       decodedAudioBufferRef.current = null;
       return;
     }
 
     // Default DJ Cue Point is 0 or first hot cue
-    setDjCuePoint(0);
-    setLoopStart(null);
-    setLoopEnd(null);
-    setIsLoopActive(false);
+    Promise.resolve().then(() => {
+      setDjCuePoint(0);
+      setLoopStart(null);
+      setLoopEnd(null);
+      setIsLoopActive(false);
+    });
 
     if (waveformCache.has(currentTrack.id) && audioBufferCache.has(currentTrack.id)) {
-      setWaveform(waveformCache.get(currentTrack.id) || null);
+      Promise.resolve().then(() => {
+        setWaveform(waveformCache.get(currentTrack.id) || null);
+      });
       decodedAudioBufferRef.current = audioBufferCache.get(currentTrack.id) || null;
       return;
     }
@@ -166,7 +168,7 @@ export default function CollectionPlayer() {
         const arrayBuffer = await response.arrayBuffer();
         if (!active) return;
 
-        const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const audioCtx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
         const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
         if (!active) return;
 
@@ -235,12 +237,12 @@ export default function CollectionPlayer() {
           const totalW = lowW + midW + highW + 0.0001;
 
           // Target vectors:
-          // Low: Neon Orange-Red [255, 60, 40]
-          // Mid: Neon Pink-Magenta [230, 40, 200]
-          // High: Neon Cyan-Blue [0, 190, 255]
-          const r = Math.floor((lowW * 255 + midW * 230 + highW * 0) / totalW);
-          const g = Math.floor((lowW * 60 + midW * 40 + highW * 190) / totalW);
-          const b = Math.floor((lowW * 40 + midW * 200 + highW * 255) / totalW);
+          // Low: Neon Green [57, 255, 20]
+          // Mid: Neon Pink [255, 0, 128]
+          // High: Neon Cyan [0, 240, 255]
+          const r = Math.floor((lowW * 57 + midW * 255 + highW * 0) / totalW);
+          const g = Math.floor((lowW * 255 + midW * 0 + highW * 240) / totalW);
+          const b = Math.floor((lowW * 20 + midW * 128 + highW * 255) / totalW);
 
           points.push({
             amplitude: Math.min(1.0, (pt.rms / maxRms) * 0.95), // Normalize to peak at 0.95
@@ -260,9 +262,9 @@ export default function CollectionPlayer() {
           const amp = 0.15 + 0.45 * Math.abs(Math.sin(i * 0.015)) * Math.random();
           dummy.push({
             amplitude: amp,
-            r: i < 350 ? 230 : 20,
-            g: i >= 350 && i < 850 ? 210 : 20,
-            b: i >= 850 ? 240 : 20
+            r: i < 350 ? 57 : (i < 850 ? 255 : 0),
+            g: i < 350 ? 255 : (i < 850 ? 0 : 240),
+            b: i < 350 ? 20 : (i < 850 ? 128 : 255)
           });
         }
         if (active) setWaveform(dummy);
@@ -282,7 +284,9 @@ export default function CollectionPlayer() {
     if (cues && cues.length > 0) {
       const firstCue = cues.find(c => c.id.startsWith('cue-'));
       if (firstCue) {
-        setDjCuePoint(firstCue.time);
+        Promise.resolve().then(() => {
+          setDjCuePoint(firstCue.time);
+        });
       }
     }
   }, [cues]);
@@ -311,7 +315,7 @@ export default function CollectionPlayer() {
     }, 15);
 
     return () => clearInterval(checkInterval);
-  }, [isPlaying, isLoopActive, loopStart, loopEnd, isFluxActive, inFluxState, audioRef]);
+  }, [isPlaying, isLoopActive, loopStart, loopEnd, isFluxActive, inFluxState, audioRef, seekPlayer]);
 
   // 3. Web Audio API Reverse Playback
   useEffect(() => {
@@ -337,7 +341,7 @@ export default function CollectionPlayer() {
       // We have the buffer! Play it in reverse using Web Audio API
       let ctx = reverseCtxRef.current;
       if (!ctx) {
-        ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        ctx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
         reverseCtxRef.current = ctx;
       }
 
@@ -389,7 +393,7 @@ export default function CollectionPlayer() {
       if (reverseSourceRef.current) {
         try {
           reverseSourceRef.current.stop();
-        } catch (e) {}
+        } catch {}
         reverseSourceRef.current = null;
       }
       if (reverseAnimRef.current) {
@@ -407,13 +411,13 @@ export default function CollectionPlayer() {
       if (reverseSourceRef.current) {
         try {
           reverseSourceRef.current.stop();
-        } catch (e) {}
+        } catch {}
       }
       if (reverseAnimRef.current) {
         cancelAnimationFrame(reverseAnimRef.current);
       }
     };
-  }, [isReverseActive, isPlaying, seekPlayer, setIsPlaying]);
+  }, [isReverseActive, isPlaying, seekPlayer, setIsPlaying, audioRef, volume]);
 
   // Sync reverse gain with player volume
   useEffect(() => {
@@ -445,7 +449,7 @@ export default function CollectionPlayer() {
     if ('preservesPitch' in audio) {
       audio.preservesPitch = isKeyLock;
     }
-  }, [pitch, isKeyLock, currentTrack, isPlaying]);
+  }, [pitch, isKeyLock, currentTrack, isPlaying, audioRef]);
 
   // Sync refs to avoid restarting the useEffect animation loop and causing stutter
   let initialGridOffset = 0;
@@ -559,26 +563,91 @@ export default function CollectionPlayer() {
       zCtx.fillStyle = '#060a0f';
       zCtx.fillRect(0, 0, zw, zh);
 
-      // Render scrolling waveform
+      // Render scrolling waveform as a Solid Waveform with horizontal gradient
       const zoomWindow = params.zoomWindow || 12; 
       const startT = cur - zoomWindow / 2;
       
-      const barSpacing = 1.5;
-      const barW = 1.0;
+      const topPoints: Array<{x: number, y: number}> = [];
+      const bottomPoints: Array<{x: number, y: number}> = [];
+      const centerY = zh / 2;
 
-      for (let x = 0; x < zw; x += barSpacing) {
+      for (let x = 0; x < zw; x += 2) {
         const t = startT + (x / zw) * zoomWindow;
         if (t >= 0 && t <= dur) {
           const wIdx = Math.floor((t / dur) * waveform.length);
           if (wIdx >= 0 && wIdx < waveform.length) {
             const pt = waveform[wIdx];
-            const barH = pt.amplitude * (zh - 10);
-            const centerY = zh / 2;
-
-            zCtx.fillStyle = `rgb(${pt.r}, ${pt.g}, ${pt.b})`;
-            zCtx.fillRect(x, centerY - barH / 2, barW, barH);
+            const halfH = pt.amplitude * (zh - 12) / 2;
+            topPoints.push({ x, y: centerY - halfH });
+            bottomPoints.push({ x, y: centerY + halfH });
+          } else {
+            topPoints.push({ x, y: centerY });
+            bottomPoints.push({ x, y: centerY });
           }
+        } else {
+          topPoints.push({ x, y: centerY });
+          bottomPoints.push({ x, y: centerY });
         }
+      }
+
+      if (topPoints.length > 0) {
+        // Create horizontal linear gradient based on frequency colors
+        const grad = zCtx.createLinearGradient(0, 0, zw, 0);
+        const sampleCount = 20;
+        for (let s = 0; s <= sampleCount; s++) {
+          const ratio = s / sampleCount;
+          const tVal = startT + ratio * zoomWindow;
+          let r = 57, g = 255, b = 20; // fallback green
+          if (tVal >= 0 && tVal <= dur) {
+            const wIdx = Math.floor((tVal / dur) * waveform.length);
+            if (wIdx >= 0 && wIdx < waveform.length) {
+              r = waveform[wIdx].r;
+              g = waveform[wIdx].g;
+              b = waveform[wIdx].b;
+            }
+          }
+          grad.addColorStop(ratio, `rgba(${r}, ${g}, ${b}, 0.85)`);
+        }
+
+        // 1. Draw solid fill
+        zCtx.beginPath();
+        zCtx.moveTo(topPoints[0].x, topPoints[0].y);
+        for (let i = 1; i < topPoints.length; i++) {
+          zCtx.lineTo(topPoints[i].x, topPoints[i].y);
+        }
+        for (let i = bottomPoints.length - 1; i >= 0; i--) {
+          zCtx.lineTo(bottomPoints[i].x, bottomPoints[i].y);
+        }
+        zCtx.closePath();
+        zCtx.fillStyle = grad;
+        zCtx.fill();
+
+        // 2. Draw bright neon outline (Top and Bottom)
+        zCtx.strokeStyle = grad;
+        zCtx.lineWidth = 2.0;
+        zCtx.lineCap = 'round';
+        zCtx.lineJoin = 'round';
+        zCtx.shadowBlur = 10;
+        zCtx.shadowColor = 'rgba(0, 240, 255, 0.7)'; // Cyberpunk neon glow
+
+        // Top line
+        zCtx.beginPath();
+        zCtx.moveTo(topPoints[0].x, topPoints[0].y);
+        for (let i = 1; i < topPoints.length; i++) {
+          zCtx.lineTo(topPoints[i].x, topPoints[i].y);
+        }
+        zCtx.stroke();
+
+        // Bottom line
+        zCtx.beginPath();
+        zCtx.moveTo(bottomPoints[0].x, bottomPoints[0].y);
+        for (let i = 1; i < bottomPoints.length; i++) {
+          zCtx.lineTo(bottomPoints[i].x, bottomPoints[i].y);
+        }
+        zCtx.stroke();
+
+        // Reset shadowBlur
+        zCtx.shadowBlur = 0;
       }
 
       // Draw Beat Grid Lines based on BPM
@@ -686,19 +755,78 @@ export default function CollectionPlayer() {
       oCtx.fillStyle = '#060a0f';
       oCtx.fillRect(0, 0, ow, oh);
 
-      const oBarSpacing = 1;
-      const oBarW = 1;
+      const oTopPoints: Array<{x: number, y: number}> = [];
+      const oBottomPoints: Array<{x: number, y: number}> = [];
+      const oCenterY = oh / 2;
 
-      for (let i = 0; i < ow; i += oBarSpacing) {
+      for (let i = 0; i < ow; i += 2) {
         const wIdx = Math.floor((i / ow) * waveform.length);
         if (wIdx >= 0 && wIdx < waveform.length) {
           const pt = waveform[wIdx];
-          const barH = pt.amplitude * (oh - 6);
-          const centerY = oh / 2;
-
-          oCtx.fillStyle = `rgba(${pt.r}, ${pt.g}, ${pt.b}, 0.85)`;
-          oCtx.fillRect(i, centerY - barH / 2, oBarW, barH);
+          const halfH = pt.amplitude * (oh - 6) / 2;
+          oTopPoints.push({ x: i, y: oCenterY - halfH });
+          oBottomPoints.push({ x: i, y: oCenterY + halfH });
+        } else {
+          oTopPoints.push({ x: i, y: oCenterY });
+          oBottomPoints.push({ x: i, y: oCenterY });
         }
+      }
+
+      if (oTopPoints.length > 0) {
+        // Create horizontal linear gradient across overview
+        const oGrad = oCtx.createLinearGradient(0, 0, ow, 0);
+        const oSampleCount = 30;
+        for (let s = 0; s <= oSampleCount; s++) {
+          const ratio = s / oSampleCount;
+          const wIdx = Math.floor(ratio * waveform.length);
+          let r = 57, g = 255, b = 20;
+          if (wIdx >= 0 && wIdx < waveform.length) {
+            r = waveform[wIdx].r;
+            g = waveform[wIdx].g;
+            b = waveform[wIdx].b;
+          }
+          oGrad.addColorStop(ratio, `rgba(${r}, ${g}, ${b}, 0.85)`);
+        }
+
+        // 1. Draw solid fill
+        oCtx.beginPath();
+        oCtx.moveTo(oTopPoints[0].x, oTopPoints[0].y);
+        for (let i = 1; i < oTopPoints.length; i++) {
+          oCtx.lineTo(oTopPoints[i].x, oTopPoints[i].y);
+        }
+        for (let i = oBottomPoints.length - 1; i >= 0; i--) {
+          oCtx.lineTo(oBottomPoints[i].x, oBottomPoints[i].y);
+        }
+        oCtx.closePath();
+        oCtx.fillStyle = oGrad;
+        oCtx.fill();
+
+        // 2. Draw neon outline
+        oCtx.strokeStyle = oGrad;
+        oCtx.lineWidth = 1.5;
+        oCtx.lineCap = 'round';
+        oCtx.lineJoin = 'round';
+        oCtx.shadowBlur = 5;
+        oCtx.shadowColor = 'rgba(0, 240, 255, 0.6)';
+
+        // Top line
+        oCtx.beginPath();
+        oCtx.moveTo(oTopPoints[0].x, oTopPoints[0].y);
+        for (let i = 1; i < oTopPoints.length; i++) {
+          oCtx.lineTo(oTopPoints[i].x, oTopPoints[i].y);
+        }
+        oCtx.stroke();
+
+        // Bottom line
+        oCtx.beginPath();
+        oCtx.moveTo(oBottomPoints[0].x, oBottomPoints[0].y);
+        for (let i = 1; i < oBottomPoints.length; i++) {
+          oCtx.lineTo(oBottomPoints[i].x, oBottomPoints[i].y);
+        }
+        oCtx.stroke();
+
+        // Reset shadowBlur
+        oCtx.shadowBlur = 0;
       }
 
       // Draw Loop Region on Overview
@@ -903,7 +1031,7 @@ export default function CollectionPlayer() {
       window.removeEventListener('touchmove', handleWindowTouchMove);
       window.removeEventListener('touchend', handleWindowMouseUp);
     };
-  }, [durationSeconds, currentTrack, setIsPlaying, zoomWindow]);
+  }, [durationSeconds, currentTrack, setIsPlaying, zoomWindow, audioRef, seekPlayer]);
 
   // Pioneer DJ CUE Button logic
   const handleCueMouseDown = () => {

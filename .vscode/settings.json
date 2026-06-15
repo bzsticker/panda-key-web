@@ -1,0 +1,13 @@
+{
+  "python.analysis.ignore": [
+    "E:/__pyrefly_virtual__/**",
+    "**/__pyrefly_virtual__/**"
+  ],
+  "python.analysis.exclude": [
+    "E:/__pyrefly_virtual__/**",
+    "**/__pyrefly_virtual__/**"
+  ],
+  "files.exclude": {
+    "**/__pyrefly_virtual__": true
+  }
+}

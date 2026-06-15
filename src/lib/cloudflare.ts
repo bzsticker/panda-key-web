@@ -4,7 +4,7 @@ import { getRequestContext } from '@cloudflare/next-on-pages';
 export interface CloudflareEnv {
   DB: D1Database;
   BUCKET: R2Bucket;
-  QUEUE: Queue<any>;
+  QUEUE: Queue<unknown>;
   API_SECRET: string;
   PYTHON_WORKER_URL?: string;
   R2_ACCESS_KEY_ID: string;
@@ -20,21 +20,22 @@ export function getCloudflareEnv(): CloudflareEnv {
       hasCtx: !!ctx,
       hasEnv: !!ctx?.env,
       envKeys: ctx?.env ? Object.keys(ctx.env) : [],
-      DB: !!(ctx?.env as any)?.DB,
+      DB: !!(ctx?.env as Record<string, unknown>)?.DB,
     });
     if (!ctx || !ctx.env) {
       throw new Error('No Cloudflare request context or env available');
     }
     return ctx.env as unknown as CloudflareEnv;
-  } catch (error: any) {
-    console.warn('[getCloudflareEnv] Error or fallback in getCloudflareEnv:', error.message || error);
+  } catch (error: unknown) {
+    const err = error as Error;
+    console.warn('[getCloudflareEnv] Error or fallback in getCloudflareEnv:', err.message || String(error));
     // Fallback to process.env in environments where request context is not available
     // (e.g. standard next dev if not proxying, or build scripts)
-    const env = process.env as unknown as Record<string, any>;
+    const env = process.env as unknown as Record<string, unknown>;
     return {
       DB: env.DB as D1Database,
       BUCKET: env.BUCKET as R2Bucket,
-      QUEUE: env.QUEUE as Queue<any>,
+      QUEUE: env.QUEUE as Queue<unknown>,
       API_SECRET: env.API_SECRET || 'pandakey_super_secret_token_123!',
       R2_ACCESS_KEY_ID: env.R2_ACCESS_KEY_ID || 'local_access_key',
       R2_SECRET_ACCESS_KEY: env.R2_SECRET_ACCESS_KEY || 'local_secret_key',

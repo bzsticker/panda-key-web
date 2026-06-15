@@ -1,7 +1,7 @@
 // src/context/AppContext.tsx
 'use client';
 
-import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 
 export interface Track {
@@ -51,7 +51,7 @@ interface AppContextType {
   collections: Playlist[]; // Custom Collections
   jobs: AnalysisJob[];
   loading: boolean;
-  user: any;
+  user: { email?: string; [key: string]: unknown } | null;
   activePage: string;
   activeFilter: string; // 'all', 'recent', 'favorites'
   searchQuery: string;
@@ -64,7 +64,18 @@ interface AppContextType {
   filterGenre: string;
   filterKeyGroup: string;
   filterKey: string;
-  settings: Record<string, any>;
+  settings: {
+    language: string;
+    theme: string;
+    crossfade: number;
+    autoPlay: boolean;
+    rememberPos: boolean;
+    autoAnalyze: boolean;
+    saveCuePoints: boolean;
+    keyNotation: string;
+    metadataFormat: string;
+    [key: string]: unknown;
+  };
   
   // Audio Player State
   currentTrack: Track | null;
@@ -86,7 +97,7 @@ interface AppContextType {
   setFilterGenre: (g: string) => void;
   setFilterKeyGroup: (k: string) => void;
   setFilterKey: (k: string) => void;
-  updateSetting: (key: string, val: any) => void;
+  updateSetting: (key: string, val: unknown) => void;
   
   // D1 / R2 Operations
   fetchLibrary: () => Promise<void>;
@@ -128,7 +139,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [collections, setCollections] = useState<Playlist[]>([]);
   const [jobs, setJobs] = useState<AnalysisJob[]>([]);
   const [loading, setLoading] = useState(true);
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<{ email?: string; [key: string]: unknown } | null>(null);
 
   // Filters & Layouts
   const [activePage, setActivePageState] = useState('collection');
@@ -139,7 +150,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const parts = pathname.split('/');
       const page = parts[parts.length - 1] || 'collection';
       if (['collection', 'tags', 'analysis', 'playlists', 'settings', 'analytics', 'edit'].includes(page)) {
-        setActivePageState(page);
+        Promise.resolve().then(() => {
+          setActivePageState(page);
+        });
       }
     }
   }, [pathname]);
@@ -156,7 +169,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [filterKey, setFilterKey] = useState('');
 
   // Settings
-  const [settings, setSettings] = useState<Record<string, any>>({
+  const [settings, setSettings] = useState<{
+    language: string;
+    theme: string;
+    crossfade: number;
+    autoPlay: boolean;
+    rememberPos: boolean;
+    autoAnalyze: boolean;
+    saveCuePoints: boolean;
+    keyNotation: string;
+    metadataFormat: string;
+    [key: string]: unknown;
+  }>({
     language: 'en',
     theme: 'dark',
     crossfade: 5,
@@ -174,8 +198,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const savedSettings = localStorage.getItem('pandakey_settings');
       if (savedSettings) {
         try {
-          const parsed = JSON.parse(savedSettings);
-          setSettings(prev => ({ ...prev, ...parsed }));
+          const parsed = JSON.parse(savedSettings) as Record<string, unknown>;
+          Promise.resolve().then(() => {
+            setSettings(prev => ({ ...prev, ...parsed }));
+          });
           
           // Apply theme
           if (parsed.theme) {
@@ -194,7 +220,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       // Load layoutMode
       const savedLayout = localStorage.getItem('collection_layout_mode');
       if (savedLayout === 'table' || savedLayout === 'grid') {
-        setLayoutMode(savedLayout);
+        Promise.resolve().then(() => {
+          setLayoutMode(savedLayout);
+        });
       }
     }
   }, []);
@@ -219,26 +247,149 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
   const endedHandlerRef = useRef<() => void>(() => {});
 
-  endedHandlerRef.current = () => {
-    if (loop) {
-      const audio = audioRef.current;
-      if (audio) {
-        audio.currentTime = 0;
-        audio.play().catch(() => setIsPlaying(false));
+  const jobsRef = useRef(jobs);
+  useEffect(() => {
+    jobsRef.current = jobs;
+  }, [jobs]);
+
+  const fetchTracksOnly = useCallback(async () => {
+    try {
+      const res = await fetch('/api/tracks', { cache: 'no-store' });
+      if (res.ok) {
+        const data = (await res.json()) as Track[];
+        setTracks(data);
       }
-    } else if (settings.autoPlay) {
-      playNext();
-    } else {
-      setIsPlaying(false);
+    } catch (e) {
+      console.error(e);
     }
-  };
+  }, []);
+
+  const pollJobs = useCallback(async () => {
+    try {
+      const res = await fetch('/api/analysis/jobs', { cache: 'no-store' });
+      if (res.ok) {
+        const data = (await res.json()) as AnalysisJob[];
+        setJobs(data);
+        
+        const hasFinished = data.some((job: AnalysisJob) => {
+          const oldJob = jobsRef.current.find(j => j.id === job.id);
+          const isDone = job.status === 'completed' || job.status === 'failed';
+          const wasNotDone = !oldJob || (oldJob.status !== 'completed' && oldJob.status !== 'failed');
+          return isDone && wasNotDone;
+        });
+        
+        if (hasFinished) {
+          await fetchTracksOnly();
+        }
+      }
+    } catch (e) {
+      console.error('Jobs polling error:', e);
+    }
+  }, [fetchTracksOnly]);
+
+  const fetchLibrary = useCallback(async () => {
+    try {
+      const [tracksRes, playlistsRes, jobsRes] = await Promise.all([
+        fetch('/api/tracks', { cache: 'no-store' }),
+        fetch('/api/playlists', { cache: 'no-store' }),
+        fetch('/api/analysis/jobs', { cache: 'no-store' })
+      ]);
+
+      if (tracksRes.ok) setTracks(await tracksRes.json());
+      if (playlistsRes.ok) {
+        const allPlaylists = (await playlistsRes.json()) as Playlist[];
+        setPlaylists(allPlaylists.filter((p) => !p.id.startsWith('collection-')));
+        setCollections(allPlaylists.filter((p) => p.id.startsWith('collection-')));
+      }
+      if (jobsRes.ok) setJobs(await jobsRes.json());
+    } catch (error) {
+      console.error('Fetch library error:', error);
+    }
+  }, []);
+
+  const playTrack = useCallback((track: Track) => {
+    setSelectedTrackId(track.id);
+    setCurrentTrack(track);
+    setIsPlaying(true);
+
+    const audio = audioRef.current;
+    if (audio) {
+      try {
+        audio.pause();
+        audio.src = `/api/tracks/${track.id}/audio`;
+        audio.load();
+        audio.play().catch(() => console.log('Audio playback started.'));
+      } catch (err) {
+        console.error('Error starting audio playback:', err);
+      }
+    }
+  }, []);
+
+  const playNext = useCallback(() => {
+    let list = tracks;
+    if (activePage === 'playlists') {
+      const pl = playlists.find(p => p.id === selectedPlaylistId);
+      if (pl) {
+        list = tracks.filter(t => pl.trackIds.includes(t.id));
+      }
+    } else if (activePage === 'collection') {
+      const col = collections.find(c => c.id === selectedCollectionId);
+      if (col) {
+        list = tracks.filter(t => col.trackIds.includes(t.id));
+      }
+    }
+    
+    if (list.length === 0) return;
+    
+    const currentIndex = list.findIndex(t => t.id === (currentTrack?.id || selectedTrackId));
+    const nextIndex = (currentIndex + 1) % list.length;
+    playTrack(list[nextIndex]);
+  }, [tracks, activePage, playlists, selectedPlaylistId, collections, selectedCollectionId, currentTrack, selectedTrackId, playTrack]);
+
+  const playPrev = useCallback(() => {
+    let list = tracks;
+    if (activePage === 'playlists') {
+      const pl = playlists.find(p => p.id === selectedPlaylistId);
+      if (pl) {
+        list = tracks.filter(t => pl.trackIds.includes(t.id));
+      }
+    } else if (activePage === 'collection') {
+      const col = collections.find(c => c.id === selectedCollectionId);
+      if (col) {
+        list = tracks.filter(t => col.trackIds.includes(t.id));
+      }
+    }
+    
+    if (list.length === 0) return;
+    
+    const currentIndex = list.findIndex(t => t.id === (currentTrack?.id || selectedTrackId));
+    let prevIndex = currentIndex - 1;
+    if (prevIndex < 0) prevIndex = list.length - 1;
+    playTrack(list[prevIndex]);
+  }, [tracks, activePage, playlists, selectedPlaylistId, collections, selectedCollectionId, currentTrack, selectedTrackId, playTrack]);
+
+
+  useEffect(() => {
+    endedHandlerRef.current = () => {
+      if (loop) {
+        const audio = audioRef.current;
+        if (audio) {
+          audio.currentTime = 0;
+          audio.play().catch(() => setIsPlaying(false));
+        }
+      } else if (settings.autoPlay) {
+        playNext();
+      } else {
+        setIsPlaying(false);
+      }
+    };
+  }, [loop, settings.autoPlay, playNext]);
 
   // Initialize HTML5 Audio
   useEffect(() => {
     audioRef.current = new Audio();
     
     const audio = audioRef.current;
-    audio.volume = volume;
     
     let lastTimeUpdate = 0;
     const handleTimeUpdate = () => {
@@ -281,6 +432,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
+  // Sync volume state with audio element
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (audio) {
+      audio.volume = volume;
+    }
+  }, [volume]);
+
   // Sync player state with audio element
   useEffect(() => {
     const audio = audioRef.current;
@@ -302,23 +461,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           router.push('/login');
           return;
         }
-        const data = (await res.json()) as any;
+        const data = (await res.json()) as { user: Record<string, unknown> };
         setUser(data.user);
         await fetchLibrary();
       } catch (err) {
+        console.error('Initialization error:', err);
         router.push('/login');
       } finally {
         setLoading(false);
       }
     }
     init();
-  }, []);
+  }, [router, fetchLibrary]);
 
-  // Sync jobs state to a ref to avoid stale closures in setInterval
-  const jobsRef = useRef(jobs);
-  useEffect(() => {
-    jobsRef.current = jobs;
-  }, [jobs]);
+  // jobsRef moved above
 
   // Poll analysis jobs in real time
   useEffect(() => {
@@ -344,63 +500,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         pollingRef.current = null;
       }
     };
-  }, [jobs, user]);
+  }, [jobs, user, pollJobs]);
 
-  const pollJobs = async () => {
-    try {
-      const res = await fetch(`/api/analysis/jobs?t=${Date.now()}`);
-      if (res.ok) {
-        const data = (await res.json()) as any;
-        setJobs(data);
-        
-        // If any job recently completed/failed, refresh library
-        const hasFinished = data.some((job: any) => {
-          const oldJob = jobsRef.current.find(j => j.id === job.id);
-          const isDone = job.status === 'completed' || job.status === 'failed';
-          const wasNotDone = !oldJob || (oldJob.status !== 'completed' && oldJob.status !== 'failed');
-          return isDone && wasNotDone;
-        });
-        
-        if (hasFinished) {
-          await fetchTracksOnly();
-        }
-      }
-    } catch (e) {
-      console.error('Jobs polling error:', e);
-    }
-  };
-
-  const fetchTracksOnly = async () => {
-    try {
-      const res = await fetch(`/api/tracks?t=${Date.now()}`);
-      if (res.ok) {
-        const data = (await res.json()) as any;
-        setTracks(data);
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  const fetchLibrary = async () => {
-    try {
-      const [tracksRes, playlistsRes, jobsRes] = await Promise.all([
-        fetch(`/api/tracks?t=${Date.now()}`),
-        fetch(`/api/playlists?t=${Date.now()}`),
-        fetch(`/api/analysis/jobs?t=${Date.now()}`)
-      ]);
-
-      if (tracksRes.ok) setTracks(await tracksRes.json());
-      if (playlistsRes.ok) {
-        const allPlaylists = (await playlistsRes.json()) as any[];
-        setPlaylists(allPlaylists.filter((p: any) => !p.id.startsWith('collection-')));
-        setCollections(allPlaylists.filter((p: any) => p.id.startsWith('collection-')));
-      }
-      if (jobsRes.ok) setJobs(await jobsRes.json());
-    } catch (error) {
-      console.error('Fetch library error:', error);
-    }
-  };
+  // fetchLibrary, fetchTracksOnly, and pollJobs declarations moved above
 
   const setActivePage = (p: string) => {
     setActivePageState(p);
@@ -431,7 +533,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           throw new Error(await createRes.text());
         }
 
-        const { trackId, r2Key, uploadUrl, useFallbackUpload } = (await createRes.json()) as any;
+        const { trackId, r2Key, uploadUrl, useFallbackUpload } = (await createRes.json()) as {
+          trackId: string;
+          r2Key: string;
+          uploadUrl?: string;
+          useFallbackUpload?: boolean;
+        };
 
         // Add dummy pending track to UI immediately for better responsiveness
         const tempTrack: Track = {
@@ -688,25 +795,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  // Player Operations
-  const playTrack = (track: Track) => {
-    setSelectedTrackId(track.id);
-    setCurrentTrack(track);
-    setIsPlaying(true);
-
-    const audio = audioRef.current;
-    if (audio) {
-      try {
-        audio.pause();
-        // Point the audio element directly to our streaming API route
-        audio.src = `/api/tracks/${track.id}/audio`;
-        audio.load();
-        audio.play().catch(() => console.log('Mock Audio playback started.'));
-      } catch (err) {
-        console.error('Error starting audio playback:', err);
-      }
-    }
-  };
+  // Player Operations (playTrack, playNext, and playPrev moved above)
 
   const togglePlayback = () => {
     if (!currentTrack) {
@@ -714,39 +803,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     setIsPlaying(!isPlaying);
-  };
-
-  const playNext = () => {
-    let list = tracks;
-    if (activePage === 'playlists') {
-      const pl = playlists.find(p => p.id === selectedPlaylistId);
-      if (pl) {
-        list = tracks.filter(t => pl.trackIds.includes(t.id));
-      }
-    }
-    
-    if (list.length === 0) return;
-    
-    const currentIndex = list.findIndex(t => t.id === (currentTrack?.id || selectedTrackId));
-    const nextIndex = (currentIndex + 1) % list.length;
-    playTrack(list[nextIndex]);
-  };
-
-  const playPrev = () => {
-    let list = tracks;
-    if (activePage === 'playlists') {
-      const pl = playlists.find(p => p.id === selectedPlaylistId);
-      if (pl) {
-        list = tracks.filter(t => pl.trackIds.includes(t.id));
-      }
-    }
-    
-    if (list.length === 0) return;
-    
-    const currentIndex = list.findIndex(t => t.id === (currentTrack?.id || selectedTrackId));
-    let prevIndex = currentIndex - 1;
-    if (prevIndex < 0) prevIndex = list.length - 1;
-    playTrack(list[prevIndex]);
   };
 
   const toggleLoop = () => {
@@ -776,7 +832,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // Fetch cue points for current track
   useEffect(() => {
     if (!currentTrack) {
-      setCues([]);
+      Promise.resolve().then(() => {
+        setCues(prev => prev.length === 0 ? prev : []);
+      });
       return;
     }
 
@@ -819,7 +877,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const updateSetting = (key: string, val: any) => {
+  const updateSetting = (key: string, val: unknown) => {
     setSettings(prev => {
       const updated = { ...prev, [key]: val };
       if (typeof window !== 'undefined') {

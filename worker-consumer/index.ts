@@ -3,12 +3,12 @@ export interface Env {
   PYTHON_WORKER_URL: string;
 }
 
-interface MessageBatch<Body = any> {
+interface MessageBatch<Body = unknown> {
   readonly queue: string;
   readonly messages: readonly Message<Body>[];
 }
 
-interface Message<Body = any> {
+interface Message<Body = unknown> {
   readonly id: string;
   readonly timestamp: Date;
   readonly body: Body;
@@ -16,8 +16,15 @@ interface Message<Body = any> {
   retry(): void;
 }
 
+interface JobBody {
+  type?: string;
+  track_id: string;
+  file_name: string;
+  [key: string]: unknown;
+}
+
 export default {
-  async queue(batch: MessageBatch<any>, env: Env): Promise<void> {
+  async queue(batch: MessageBatch<JobBody>, env: Env): Promise<void> {
     console.log(`[Queue Consumer] Received batch of ${batch.messages.length} messages.`);
     
     for (const message of batch.messages) {
