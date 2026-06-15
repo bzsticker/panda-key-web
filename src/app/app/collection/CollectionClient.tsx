@@ -137,7 +137,7 @@ export default function CollectionPage() {
 
   // Drag and Drop & Progress Drawer States
   const [isDragging, setIsDragging] = useState(false);
-  const [isDrawerCollapsed, setIsDrawerCollapsed] = useState(false);
+  const [isDrawerCollapsed, setIsDrawerCollapsed] = useState(true);
   const dragCounterRef = useRef(0);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1286,7 +1286,78 @@ export default function CollectionPage() {
           <p id="collectionSubtitle">{filtered.length} {t('tracks_count')} · {formatTotalTime(totalDuration)}</p>
         </div>
         
-        <div className="toolbar relative">
+        <div className="flex flex-col items-start gap-2 relative">
+          {/* Analysis Queue Panel */}
+          {jobs.length > 0 && (
+            <div className="relative">
+              <div 
+                className="progress-drawer-header" 
+                style={{ 
+                  width: '320px', 
+                  borderRadius: 'var(--border-radius-md)',
+                  border: '1px solid var(--panel-border)',
+                }}
+                onClick={() => setIsDrawerCollapsed(!isDrawerCollapsed)}
+              >
+                <div className="progress-drawer-title">
+                  <RefreshCcw size={12} className={jobs.some(j => j.status === 'pending' || j.status === 'running') ? 'animate-spin' : ''} />
+                  <span>
+                    {settings.language === 'th' 
+                      ? `คิวงานวิเคราะห์ (${jobs.filter(j => j.status === 'pending' || j.status === 'running').length})` 
+                      : `Analysis Queue (${jobs.filter(j => j.status === 'pending' || j.status === 'running').length})`}
+                  </span>
+                </div>
+                <span className="progress-drawer-toggle">
+                  {isDrawerCollapsed ? '▲' : '▼'}
+                </span>
+              </div>
+              
+              {!isDrawerCollapsed && (
+                <div 
+                  className="absolute left-0 z-50 rounded-lg border shadow-2xl overflow-hidden"
+                  style={{ 
+                    top: '42px',
+                    width: '320px', 
+                    backgroundColor: 'rgba(13, 24, 36, 0.95)', 
+                    borderColor: 'var(--panel-border)',
+                    backdropFilter: 'blur(20px)'
+                  }}
+                >
+                  <div className="progress-drawer-body">
+                    {jobs.map(job => (
+                      <div key={job.id} className="progress-job-item">
+                        <div className="progress-job-meta">
+                          <span className="progress-job-name" title={job.file_name}>{job.file_name}</span>
+                          <span className="progress-job-percent">{job.progress}%</span>
+                        </div>
+                        <div className="progress-job-bar-bg">
+                          <div 
+                            className="progress-job-bar-fill" 
+                            style={{ width: `${job.progress}%` }} 
+                          />
+                        </div>
+                        <div className="progress-job-step">
+                          {job.status === 'failed' ? (
+                            <span className="text-red-400 font-semibold" style={{ color: '#ff5074' }}>
+                              {job.error_message || (settings.language === 'th' ? 'ผิดพลาด' : 'Failed')}
+                            </span>
+                          ) : job.status === 'completed' ? (
+                            <span className="text-green-400 font-semibold" style={{ color: '#3ce57c' }}>
+                              {settings.language === 'th' ? 'วิเคราะห์สำเร็จ' : 'Analysis Complete'}
+                            </span>
+                          ) : (
+                            job.current_step
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="toolbar relative">
           {/* Add Files */}
           <button className="toolbar-btn-blue" onClick={handleAddFilesClick}>
             ＋ {t('add_files')}
@@ -1387,6 +1458,7 @@ export default function CollectionPage() {
           <button className={`square ${layoutMode === 'table' ? 'active' : ''}`} onClick={() => setLayoutMode('table')}>≡</button>
         </div>
       </div>
+    </div>
 
       {layoutMode === 'table' ? (
         <div 
@@ -2313,61 +2385,7 @@ export default function CollectionPage() {
         </div>
       </div>
 
-      {/* Progress Drawer for Audio Uploads & Analysis */}
-      {jobs.length > 0 && (
-        <div 
-          className={`progress-drawer ${isDrawerCollapsed ? 'collapsed' : ''}`}
-          style={{ bottom: currentTrack ? '304px' : '104px' }}
-        >
-          <div 
-            className="progress-drawer-header" 
-            onClick={() => setIsDrawerCollapsed(!isDrawerCollapsed)}
-          >
-            <div className="progress-drawer-title">
-              <RefreshCcw size={12} className={jobs.some(j => j.status === 'pending' || j.status === 'running') ? 'animate-spin' : ''} />
-              <span>
-                {settings.language === 'th' 
-                  ? `คิวงานวิเคราะห์ (${jobs.filter(j => j.status === 'pending' || j.status === 'running').length})` 
-                  : `Analysis Queue (${jobs.filter(j => j.status === 'pending' || j.status === 'running').length})`}
-              </span>
-            </div>
-            <span className="progress-drawer-toggle">
-              {isDrawerCollapsed ? '▲' : '▼'}
-            </span>
-          </div>
-          {!isDrawerCollapsed && (
-            <div className="progress-drawer-body">
-              {jobs.map(job => (
-                <div key={job.id} className="progress-job-item">
-                  <div className="progress-job-meta">
-                    <span className="progress-job-name" title={job.file_name}>{job.file_name}</span>
-                    <span className="progress-job-percent">{job.progress}%</span>
-                  </div>
-                  <div className="progress-job-bar-bg">
-                    <div 
-                      className="progress-job-bar-fill" 
-                      style={{ width: `${job.progress}%` }} 
-                    />
-                  </div>
-                  <div className="progress-job-step">
-                    {job.status === 'failed' ? (
-                      <span className="text-red-400 font-semibold" style={{ color: '#ff5074' }}>
-                        {job.error_message || (settings.language === 'th' ? 'ผิดพลาด' : 'Failed')}
-                      </span>
-                    ) : job.status === 'completed' ? (
-                      <span className="text-green-400 font-semibold" style={{ color: '#3ce57c' }}>
-                        {settings.language === 'th' ? 'วิเคราะห์สำเร็จ' : 'Analysis Complete'}
-                      </span>
-                    ) : (
-                      job.current_step
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
+
     </section>
   );
 }
